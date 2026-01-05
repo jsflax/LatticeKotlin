@@ -1,0 +1,27 @@
+# ninja log v5
+0	132	1766943730223316651	CMakeFiles/lattice_jni.dir/lattice_jni.c.o	c4025bd218e88f1
+132	215	1766943730305455927	/Users/jason/Documents/LatticeKotlin/lattice-runtime/build/intermediates/cxx/Debug/46w5z5s2/obj/arm64-v8a/liblattice_jni.so	afbe45bc42952fa3
+0	162	1766944046259520357	/Users/jason/Documents/LatticeKotlin/lattice-runtime/build/intermediates/cxx/Debug/46w5z5s2/obj/arm64-v8a/liblattice_jni.so	afbe45bc42952fa3
+0	144	1766945025283105491	CMakeFiles/lattice_jni.dir/lattice_jni.c.o	c4025bd218e88f1
+144	226	1766945025364804016	/Users/jason/Documents/LatticeKotlin/lattice-runtime/build/intermediates/cxx/Debug/46w5z5s2/obj/arm64-v8a/liblattice_jni.so	afbe45bc42952fa3
+0	287	1766945820828971552	CMakeFiles/lattice_jni.dir/lattice_jni.c.o	c4025bd218e88f1
+288	454	1766945820994667545	/Users/jason/Documents/LatticeKotlin/lattice-runtime/build/intermediates/cxx/Debug/46w5z5s2/obj/arm64-v8a/liblattice_jni.so	afbe45bc42952fa3
+0	32	0	clean	62c889d6dc9a4f7e
+0	213	1766950160628586211	CMakeFiles/lattice_jni.dir/lattice_jni.c.o	c4025bd218e88f1
+214	330	1766950160745423414	/Users/jason/Documents/LatticeKotlin/lattice-runtime/build/intermediates/cxx/Debug/46w5z5s2/obj/arm64-v8a/liblattice_jni.so	afbe45bc42952fa3
+1	74	1766950293600822808	CMakeFiles/lattice_jni.dir/lattice_jni.c.o	c4025bd218e88f1
+75	139	1766950293663418198	/Users/jason/Documents/LatticeKotlin/lattice-runtime/build/intermediates/cxx/Debug/46w5z5s2/obj/arm64-v8a/liblattice_jni.so	afbe45bc42952fa3
+0	43	1766950561375692665	CMakeFiles/lattice_jni.dir/lattice_jni.c.o	c4025bd218e88f1
+43	83	1766950561414238578	/Users/jason/Documents/LatticeKotlin/lattice-runtime/build/intermediates/cxx/Debug/46w5z5s2/obj/arm64-v8a/liblattice_jni.so	afbe45bc42952fa3
+4	155	1766956917263567097	CMakeFiles/lattice_jni.dir/lattice_jni.c.o	c4025bd218e88f1
+155	237	1766956917345223112	/Users/jason/Documents/LatticeKotlin/lattice-runtime/build/intermediates/cxx/Debug/46w5z5s2/obj/arm64-v8a/liblattice_jni.so	afbe45bc42952fa3
+0	40	1766960957187620158	CMakeFiles/lattice_jni.dir/lattice_jni.c.o	c4025bd218e88f1
+40	83	1766960957229801431	/Users/jason/Documents/LatticeKotlin/lattice-runtime/build/intermediates/cxx/Debug/46w5z5s2/obj/arm64-v8a/liblattice_jni.so	afbe45bc42952fa3
+1	44	1766961550629384359	CMakeFiles/lattice_jni.dir/lattice_jni.c.o	c4025bd218e88f1
+44	80	1766961550661217636	/Users/jason/Documents/LatticeKotlin/lattice-runtime/build/intermediates/cxx/Debug/46w5z5s2/obj/arm64-v8a/liblattice_jni.so	afbe45bc42952fa3
+0	42	1766961963029369317	CMakeFiles/lattice_jni.dir/lattice_jni.c.o	c4025bd218e88f1
+42	75	1766961963061746306	/Users/jason/Documents/LatticeKotlin/lattice-runtime/build/intermediates/cxx/Debug/46w5z5s2/obj/arm64-v8a/liblattice_jni.so	afbe45bc42952fa3
+1	43	1766962618487282565	CMakeFiles/lattice_jni.dir/lattice_jni.c.o	c4025bd218e88f1
+43	78	1766962618520379180	/Users/jason/Documents/LatticeKotlin/lattice-runtime/build/intermediates/cxx/Debug/46w5z5s2/obj/arm64-v8a/liblattice_jni.so	afbe45bc42952fa3
+1	45	1766962781557172592	CMakeFiles/lattice_jni.dir/lattice_jni.c.o	c4025bd218e88f1
+45	80	1766962781590361167	/Users/jason/Documents/LatticeKotlin/lattice-runtime/build/intermediates/cxx/Debug/46w5z5s2/obj/arm64-v8a/liblattice_jni.so	afbe45bc42952fa3

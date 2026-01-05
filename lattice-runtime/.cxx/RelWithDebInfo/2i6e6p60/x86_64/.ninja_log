@@ -1,0 +1,9 @@
+# ninja log v5
+0	100	1766962329414930028	CMakeFiles/lattice_jni.dir/lattice_jni.c.o	bc791f7661c7ff52
+100	132	1766962329446015261	/Users/jason/Documents/LatticeKotlin/lattice-runtime/build/intermediates/cxx/RelWithDebInfo/2i6e6p60/obj/x86_64/liblattice_jni.so	1dbcbd945d0e03ff
+0	4	0	clean	62c889d6dc9a4f7e
+1	96	1766962599221981981	CMakeFiles/lattice_jni.dir/lattice_jni.c.o	bc791f7661c7ff52
+96	126	1766962599251155624	/Users/jason/Documents/LatticeKotlin/lattice-runtime/build/intermediates/cxx/RelWithDebInfo/2i6e6p60/obj/x86_64/liblattice_jni.so	1dbcbd945d0e03ff
+0	4	0	clean	62c889d6dc9a4f7e
+0	96	1766962774480817724	CMakeFiles/lattice_jni.dir/lattice_jni.c.o	bc791f7661c7ff52
+96	126	1766962774510556369	/Users/jason/Documents/LatticeKotlin/lattice-runtime/build/intermediates/cxx/RelWithDebInfo/2i6e6p60/obj/x86_64/liblattice_jni.so	1dbcbd945d0e03ff

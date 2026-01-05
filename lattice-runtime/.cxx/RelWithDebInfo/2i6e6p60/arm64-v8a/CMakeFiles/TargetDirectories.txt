@@ -1,0 +1,3 @@
+/Users/jason/Documents/LatticeKotlin/lattice-runtime/.cxx/RelWithDebInfo/2i6e6p60/arm64-v8a/CMakeFiles/lattice_jni.dir
+/Users/jason/Documents/LatticeKotlin/lattice-runtime/.cxx/RelWithDebInfo/2i6e6p60/arm64-v8a/CMakeFiles/edit_cache.dir
+/Users/jason/Documents/LatticeKotlin/lattice-runtime/.cxx/RelWithDebInfo/2i6e6p60/arm64-v8a/CMakeFiles/rebuild_cache.dir

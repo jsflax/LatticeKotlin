@@ -1,0 +1,40 @@
+{
+  "buildFiles": [
+    "/Users/jason/Documents/LatticeKotlin/lattice-runtime/src/androidMain/jni/CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "/Users/jason/Library/Android/sdk/cmake/3.22.1/bin/ninja",
+      "-C",
+      "/Users/jason/Documents/LatticeKotlin/lattice-runtime/.cxx/RelWithDebInfo/2i6e6p60/x86_64",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "/Users/jason/Library/Android/sdk/cmake/3.22.1/bin/ninja",
+    "-C",
+    "/Users/jason/Documents/LatticeKotlin/lattice-runtime/.cxx/RelWithDebInfo/2i6e6p60/x86_64",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {
+    "lattice_jni::@6890427a1f51a3e7e1df": {
+      "toolchain": "toolchain",
+      "abi": "x86_64",
+      "artifactName": "lattice_jni",
+      "output": "/Users/jason/Documents/LatticeKotlin/lattice-runtime/build/intermediates/cxx/RelWithDebInfo/2i6e6p60/obj/x86_64/liblattice_jni.so",
+      "runtimeFiles": [
+        "/Users/jason/Documents/LatticeKotlin/lattice-runtime/src/androidMain/jniLibs/x86_64/libLatticeCAPI.so"
+      ]
+    }
+  },
+  "toolchains": {
+    "toolchain": {
+      "cCompilerExecutable": "/Users/jason/Library/Android/sdk/ndk/25.1.8937393/toolchains/llvm/prebuilt/darwin-x86_64/bin/clang.lld",
+      "cppCompilerExecutable": "/Users/jason/Library/Android/sdk/ndk/25.1.8937393/toolchains/llvm/prebuilt/darwin-x86_64/bin/clang++.lld"
+    }
+  },
+  "cFileExtensions": [
+    "c"
+  ],
+  "cppFileExtensions": []
+}

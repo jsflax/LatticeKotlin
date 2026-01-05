@@ -1,0 +1,3 @@
+package = com.lattice.capi
+headers = lattice.h
+headerFilter = lattice.h
