@@ -38,11 +38,22 @@ fun registerTestModelFactories() {
  * Helper function to create a Lattice instance with a unique temporary path.
  * This mirrors Swift's testLattice() helper for test isolation.
  */
+/** Paths created by testLattice for cleanup in @AfterTest. */
+val testLatticePaths = mutableListOf<String>()
+
 fun testLattice(vararg types: KClass<out LatticeObject>): Lattice {
-    // Generate unique path to ensure test isolation
     val randomSuffix = Random.nextLong().toString(16)
     val path = "/tmp/lattice_test_${randomSuffix}.sqlite"
+    testLatticePaths.add(path)
     return Lattice(path, *types)
+}
+
+/** Call in @AfterTest to clean up test database files. */
+fun cleanupTestLattices() {
+    for (path in testLatticePaths) {
+        Lattice.deleteDatabase(path)
+    }
+    testLatticePaths.clear()
 }
 
 @Model

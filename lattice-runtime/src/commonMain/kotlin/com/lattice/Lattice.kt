@@ -83,11 +83,35 @@ class Lattice private constructor(
 
     // Store model types for later use
     private val registeredTypes = modelTypes.toList()
+
+    /** The model types registered with this database. */
+    val registeredModelTypes: List<KClass<out LatticeObject>> get() = registeredTypes
     private val dbHandle: Long
     private val modelRegistry = mutableMapOf<KClass<*>, ModelInfo>()
 
+    /** The configuration used to create this database. */
+    val configuration: LatticeConfiguration get() = config
+
     // Change stream for observation
-    private val _changeFlow = MutableSharedFlow<List<Change>>()
+    private val _changeFlow = MutableSharedFlow<List<Change>>(extraBufferCapacity = 64)
+
+    /** Whether the sync WebSocket is currently connected. */
+    val isSyncConnected: Boolean get() = NativeBridge.isSyncConnected(dbHandle)
+
+    /**
+     * Suspend until the sync WebSocket connection is established.
+     * Uses an event-driven check via the changeStream subscription,
+     * not polling.
+     */
+    suspend fun awaitSyncConnected(timeoutMs: Long = 30_000) {
+        if (config.syncEndpoint == null || isSyncConnected) return
+        kotlinx.coroutines.withTimeout(timeoutMs) {
+            while (!isSyncConnected) {
+                kotlinx.coroutines.delay(50) // yield, check again
+            }
+        }
+    }
+
 
     // Factory functions for creating model instances (populated by companion)
     companion object {
@@ -114,6 +138,19 @@ class Lattice private constructor(
                 }?.value
             }
             return factory
+        }
+
+        /**
+         * Delete a database and its associated files (WAL, SHM).
+         * Call after [close] to remove the database files from disk.
+         * Mirrors Swift's `Lattice.delete(for:)`.
+         */
+        fun deleteDatabase(path: String) {
+            for (suffix in listOf("", "-wal", "-shm")) {
+                try {
+                    platform.posix.unlink(path + suffix)
+                } catch (_: Exception) {}
+            }
         }
     }
 
@@ -194,6 +231,50 @@ class Lattice private constructor(
         if (dbHandle == 0L) {
             throw LatticeException("Failed to create database: ${NativeBridge.getLastError()}")
         }
+
+        // Register AuditLog table observer for changeStream (mirrors Swift's pattern).
+        // When sync data arrives, the C++ layer creates AuditLog entries. Observing
+        // AuditLog ensures changeStream fires for both local AND remote mutations.
+        setupAuditLogObserver()
+    }
+
+    private var auditLogObserverToken: Long = 0
+
+    private fun setupAuditLogObserver() {
+        auditLogObserverToken = ObserverRegistry.observeTableRaw(
+            dbHandle = dbHandle,
+            tableName = "AuditLog",
+        ) { operation, rowId, globalId ->
+            // Resolve the AuditLog entry to get the MODEL-level change
+            // (mirrors Swift's changes.resolve(on: lattice) pattern)
+            val auditHandle = NativeBridge.findObject(dbHandle, "AuditLog", rowId)
+            if (auditHandle != 0L) {
+                val modelTable = NativeBridge.getStringProperty(auditHandle, "tableName") ?: "AuditLog"
+                val modelOp = NativeBridge.getStringProperty(auditHandle, "operation") ?: operation
+                val modelRowId = NativeBridge.getIntProperty(auditHandle, "rowId")
+                val modelGlobalId = NativeBridge.getStringProperty(auditHandle, "globalRowId") ?: globalId
+                val isSynced = NativeBridge.getIntProperty(auditHandle, "isSynchronized") != 0L
+                // Note: auditHandle will be released by the C++ ref-counting
+
+                val change = Change(
+                    tableName = modelTable,
+                    operation = try { ChangeOperation.valueOf(modelOp) } catch (_: Exception) { ChangeOperation.INSERT },
+                    rowId = modelRowId,
+                    globalId = modelGlobalId,
+                    isSynchronized = isSynced,
+                )
+                _changeFlow.tryEmit(listOf(change))
+            } else {
+                // Fallback: emit raw AuditLog change
+                val change = Change(
+                    tableName = "AuditLog",
+                    operation = try { ChangeOperation.valueOf(operation) } catch (_: Exception) { ChangeOperation.INSERT },
+                    rowId = rowId,
+                    globalId = globalId,
+                )
+                _changeFlow.tryEmit(listOf(change))
+            }
+        }
     }
 
     // Data class to hold flattened schema arrays for JNI
@@ -236,6 +317,8 @@ class Lattice private constructor(
                     LatticePropertyKind.PRIMITIVE -> 0
                     LatticePropertyKind.LINK -> 1
                     LatticePropertyKind.LINK_LIST -> 2
+                    LatticePropertyKind.VIRTUAL_LIST -> 3
+                    LatticePropertyKind.VIRTUAL_LINK -> 4
                 })
                 propNullable.add(prop.nullable)
                 propTargetTables.add(prop.targetTable)
@@ -278,6 +361,35 @@ class Lattice private constructor(
     }
 
     /**
+     * Add an object with a specific globalId (preserving identity across databases).
+     */
+    fun <T : LatticeObject> add(obj: T, preservingGlobalId: String): T {
+        val existingHandle = obj._latticeHandle
+        if (existingHandle == 0L) {
+            throw LatticeException("Object has no native handle - was it created properly?")
+        }
+
+        val managedHandle = NativeBridge.addObjectWithGlobalId(dbHandle, existingHandle, preservingGlobalId)
+        if (managedHandle == 0L) {
+            throw LatticeException("Failed to add object with globalId: ${NativeBridge.getLastError()}")
+        }
+
+        obj._latticeHandle = managedHandle
+        return obj
+    }
+
+    /**
+     * Attach another database for cross-DB queries (UNION ALL).
+     * After attaching, queries on this database will also search the attached database.
+     */
+    fun attaching(other: Lattice): Lattice {
+        if (!NativeBridge.attachDb(dbHandle, other.dbHandle)) {
+            throw LatticeException("Failed to attach database: ${NativeBridge.getLastError()}")
+        }
+        return this
+    }
+
+    /**
      * Query all objects of a given type.
      */
     fun <T : LatticeObject> objects(type: KClass<T>): Results<T> {
@@ -290,6 +402,10 @@ class Lattice private constructor(
     // Internal: get live count for Results
     internal fun queryCount(tableName: String, whereClause: String?): Int {
         return NativeBridge.queryCount(dbHandle, tableName, whereClause)
+    }
+
+    internal fun queryCountDistinct(tableName: String, whereClause: String?, groupBy: String?, distinctBy: String?): Int {
+        return NativeBridge.countDistinct(dbHandle, tableName, whereClause, groupBy, distinctBy)
     }
 
     // Internal: query objects for Results with pagination
@@ -375,9 +491,14 @@ class Lattice private constructor(
      * Close the database connection.
      */
     fun close() {
+        // Close DB connections and stop background services FIRST
+        // (mirrors Swift's Lattice.close() → lattice_db::close())
+        NativeBridge.closeDb(dbHandle)
         NativeBridge.releaseDb(dbHandle)
         scheduler?.close()
     }
+
+    // (companion object is defined above with registerFactory, getFactory, deleteDatabase)
 
     // Internal: delete objects matching where clause
     internal fun deleteWhere(tableName: String, whereClause: String?): Int {
@@ -460,6 +581,10 @@ class Lattice private constructor(
     internal fun markSynced(globalIds: List<String>) {
         val jsonArray = "[${globalIds.joinToString(",") { "\"$it\"" }}]"
         NativeBridge.markSynced(dbHandle, jsonArray)
+    }
+
+    internal fun compactAuditLog(): Long {
+        return NativeBridge.compactAuditLog(dbHandle)
     }
 
     // Simple JSON array parser for string arrays

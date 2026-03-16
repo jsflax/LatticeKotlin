@@ -25,7 +25,9 @@ class Results<T : LatticeObject>(
     private val whereClause: String? = null,
     private val orderByClause: String? = null,
     private val limitValue: Int? = null,
-    private val offsetValue: Int? = null
+    private val offsetValue: Int? = null,
+    private val distinctBy: String? = null,
+    private val groupBy: String? = null
 ) : Iterable<T> {
 
     /**
@@ -33,7 +35,11 @@ class Results<T : LatticeObject>(
      * This is a live count - it reflects the current database state.
      */
     val count: Int
-        get() = lattice.queryCount(tableName, whereClause)
+        get() = if (distinctBy != null || groupBy != null) {
+            lattice.queryCountDistinct(tableName, whereClause, groupBy, distinctBy)
+        } else {
+            lattice.queryCount(tableName, whereClause)
+        }
 
     /**
      * Get object at index. Always fetches fresh from database.
@@ -92,7 +98,7 @@ class Results<T : LatticeObject>(
             newWhereClause
         }
 
-        return Results(tableName, type, lattice, combinedWhere, orderByClause, limitValue, offsetValue)
+        return Results(tableName, type, lattice, combinedWhere, orderByClause, limitValue, offsetValue, distinctBy = distinctBy, groupBy = groupBy)
     }
 
     /**
@@ -117,7 +123,7 @@ class Results<T : LatticeObject>(
             newOrderBy
         }
 
-        return Results(tableName, type, lattice, whereClause, combinedOrderBy, limitValue, offsetValue)
+        return Results(tableName, type, lattice, whereClause, combinedOrderBy, limitValue, offsetValue, distinctBy = distinctBy, groupBy = groupBy)
     }
 
     /**
@@ -125,7 +131,7 @@ class Results<T : LatticeObject>(
      * Returns a new Results with the limit applied.
      */
     fun limit(count: Int): Results<T> {
-        return Results(tableName, type, lattice, whereClause, orderByClause, count, offsetValue)
+        return Results(tableName, type, lattice, whereClause, orderByClause, count, offsetValue, distinctBy = distinctBy, groupBy = groupBy)
     }
 
     /**
@@ -133,7 +139,60 @@ class Results<T : LatticeObject>(
      * Returns a new Results with the offset applied.
      */
     fun offset(count: Int): Results<T> {
-        return Results(tableName, type, lattice, whereClause, orderByClause, limitValue, count)
+        return Results(tableName, type, lattice, whereClause, orderByClause, limitValue, count, distinctBy = distinctBy, groupBy = groupBy)
+    }
+
+    /**
+     * Deduplicate results by a column.
+     * Returns a new Results where each unique value of the column appears once.
+     *
+     * Example:
+     *     results.distinct("category")
+     *     results.distinct("globalId")
+     */
+    fun distinct(by: String): Results<T> {
+        return Results(tableName, type, lattice, whereClause, orderByClause, limitValue, offsetValue, distinctBy = by, groupBy = groupBy)
+    }
+
+    /**
+     * Group results by a column.
+     *
+     * Example:
+     *     results.group("category")
+     */
+    fun group(by: String): Results<T> {
+        return Results(tableName, type, lattice, whereClause, orderByClause, limitValue, offsetValue, distinctBy = distinctBy, groupBy = by)
+    }
+
+    /**
+     * Full-text search filter.
+     * Requires the column to be marked with @FullText.
+     *
+     * Example:
+     *     results.matching("machine learning", on = "content")
+     */
+    fun matching(query: String, on: String): Results<T> {
+        val ftsTable = "_${tableName}_${on}_fts"
+        val ftsWhere = "id IN (SELECT rowid FROM $ftsTable WHERE $ftsTable MATCH '$query')"
+        val combinedWhere = if (whereClause != null) {
+            "($whereClause) AND ($ftsWhere)"
+        } else {
+            ftsWhere
+        }
+        return Results(tableName, type, lattice, combinedWhere, orderByClause, limitValue, offsetValue)
+    }
+
+    /**
+     * Full-text search filter using a TextQuery builder.
+     * Requires the column to be marked with @FullText.
+     *
+     * Example:
+     *     results.matching(TextQuery.allOf("machine", "learning"), on = "content")
+     *     results.matching(TextQuery.phrase("neural network"), on = "content")
+     *     results.matching(TextQuery.prefix("mach"), on = "content")
+     */
+    fun matching(query: TextQuery, on: String): Results<T> {
+        return matching(query.toExpression(), on)
     }
 
     /**

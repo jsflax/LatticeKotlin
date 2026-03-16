@@ -136,9 +136,11 @@ class KtorWebSocket(
                         senderJob.cancel()
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Normal shutdown — coroutine was cancelled during disconnect
+                _state = WebSocketState.CLOSED
             } catch (e: Exception) {
                 println("KtorWebSocket: connection error: ${e.message}")
-                e.printStackTrace()
                 _state = WebSocketState.CLOSED
                 onError?.invoke(e.message ?: "Connection failed")
             }
@@ -147,16 +149,18 @@ class KtorWebSocket(
 
     override fun disconnect() {
         _state = WebSocketState.CLOSING
-        scope.launch {
-            try {
-                session?.close(CloseReason(CloseReason.Codes.NORMAL, "Client disconnect"))
-            } catch (e: Exception) {
-                // Ignore close errors
+        try {
+            session?.let { s ->
+                scope.launch {
+                    try {
+                        s.close(CloseReason(CloseReason.Codes.NORMAL, "Client disconnect"))
+                    } catch (_: Exception) {}
+                }
             }
             connectionJob?.cancel()
-            session = null
-            _state = WebSocketState.CLOSED
-        }
+        } catch (_: Exception) {}
+        session = null
+        _state = WebSocketState.CLOSED
     }
 
     override fun state(): WebSocketState = _state
@@ -177,13 +181,13 @@ class KtorWebSocket(
  */
 expect fun createDefaultHttpClient(): HttpClient
 
-class KtorWebSocketFactory(
-    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-) : LatticeWebSocketFactory {
-
-    private val client: HttpClient by lazy { createDefaultHttpClient() }
+class KtorWebSocketFactory : LatticeWebSocketFactory {
 
     override fun createWebSocket(): LatticeWebSocket {
+        // Each WebSocket gets its own client + scope for full isolation.
+        // This prevents one connection's state from affecting others.
+        val client = createDefaultHttpClient()
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
         return KtorWebSocket(client, scope)
     }
 }

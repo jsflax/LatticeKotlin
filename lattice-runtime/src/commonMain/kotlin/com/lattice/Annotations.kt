@@ -49,6 +49,78 @@ annotation class Embedded
 annotation class Ignore
 
 /**
+ * Marks a property to have a non-unique index created on its column.
+ *
+ * ```kotlin
+ * @Model
+ * class Product {
+ *     @Indexed var name: String = ""
+ *     @Indexed var category: String = ""
+ * }
+ * ```
+ */
+@Target(AnnotationTarget.PROPERTY)
+@Retention(AnnotationRetention.BINARY)
+annotation class Indexed
+
+/**
+ * Marks a property as having a unique constraint.
+ *
+ * For compound unique constraints, use [compoundedWith] to specify
+ * additional property names that form the compound key.
+ *
+ * Set [allowsUpsert] to true to allow INSERT OR REPLACE behavior.
+ *
+ * ```kotlin
+ * @Model
+ * class User {
+ *     @Unique var email: String = ""
+ *     @Unique(compoundedWith = ["firstName"], allowsUpsert = true)
+ *     var lastName: String = ""
+ *     var firstName: String = ""
+ * }
+ * ```
+ */
+@Target(AnnotationTarget.PROPERTY)
+@Retention(AnnotationRetention.BINARY)
+annotation class Unique(
+    val compoundedWith: Array<String> = [],
+    val allowsUpsert: Boolean = false
+)
+
+/**
+ * Marks a property for full-text search indexing (FTS5).
+ *
+ * ```kotlin
+ * @Model
+ * class Article {
+ *     var title: String = ""
+ *     @FullText var content: String = ""
+ * }
+ * ```
+ */
+@Target(AnnotationTarget.PROPERTY)
+@Retention(AnnotationRetention.BINARY)
+annotation class FullText
+
+/**
+ * Maps a Kotlin property name to a custom column name in the database.
+ *
+ * ```kotlin
+ * @Model
+ * class Person {
+ *     @Property(name = "full_name")
+ *     var fullName: String = ""
+ * }
+ * ```
+ */
+@Target(AnnotationTarget.PROPERTY)
+@Retention(AnnotationRetention.BINARY)
+annotation class Property(
+    val name: String
+)
+
+/**
  * Marks an enum class as a Lattice-compatible enum.
  *
  * By default, enums are stored as TEXT using the enum entry name.

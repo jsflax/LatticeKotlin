@@ -7,6 +7,10 @@ plugins {
     `maven-publish`
 }
 
+// LatticeCore is a git submodule pinned to a release tag.
+// The native library is either pre-built in libs/ or built from source via CMake.
+val latticeCoreSrc = rootProject.file("LatticeCore")
+val latticeCoreHeader = latticeCoreSrc.resolve("Sources/LatticeCAPI/include/lattice.h")
 val libsDir = project.file("libs")
 val compilerPluginProject = project(":lattice-compiler-plugin")
 
@@ -62,10 +66,23 @@ kotlin {
             }
         }
 
-        // All native targets depend on nativeMain
+        val nativeTest by creating {
+            dependsOn(commonTest.get())
+            dependencies {
+                // Ktor Server CIO for in-process sync relay (mirrors Swift's Vapor test server)
+                implementation("io.ktor:ktor-server-core:2.3.7")
+                implementation("io.ktor:ktor-server-cio:2.3.7")
+                implementation("io.ktor:ktor-server-websockets:2.3.7")
+            }
+        }
+
+        // All native targets depend on nativeMain/nativeTest
         val macosArm64Main by getting { dependsOn(nativeMain) }
         val macosX64Main by getting { dependsOn(nativeMain) }
         val linuxX64Main by getting { dependsOn(nativeMain) }
+        val macosArm64Test by getting { dependsOn(nativeTest) }
+        val macosX64Test by getting { dependsOn(nativeTest) }
+        val linuxX64Test by getting { dependsOn(nativeTest) }
 
         // Android JVM target has its own implementation (JNI)
         // Does NOT depend on nativeMain (cinterop not available on JVM)

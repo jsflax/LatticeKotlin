@@ -122,6 +122,13 @@ internal actual object NativeBridge {
                     props[p].nullable = propNullable[propIdx]
                     props[p].target_table = propTargetTables[propIdx]?.cstr?.ptr
                     props[p].link_table = propLinkTables[propIdx]?.cstr?.ptr
+                    // New fields default to false/null - will be set by extended API
+                    props[p].is_indexed = false
+                    props[p].is_unique = false
+                    props[p].is_full_text = false
+                    props[p].is_vector = false
+                    props[p].is_geo_bounds = false
+                    props[p].column_name = null
                     propIdx++
                 }
             }
@@ -133,6 +140,11 @@ internal actual object NativeBridge {
             lattice_db_create_with_schemas(path, schemas, numTables)
         }
         ptr?.rawValue?.toLong() ?: 0L
+    }
+
+    actual fun closeDb(dbHandle: Long) {
+        val ptr = dbHandle.toDbPtr() ?: return
+        lattice_db_close(ptr)
     }
 
     actual fun releaseDb(dbHandle: Long) {
@@ -352,12 +364,79 @@ internal actual object NativeBridge {
 
     // ========== Object Creation ==========
 
-    actual fun createObjectWithSchema(tableName: String, schemaJson: String): Long {
-        // Parse schema JSON and create with schema
-        // For now, fall back to simple creation
-        // TODO: Parse schemaJson and call lattice_object_create_with_schema
-        val ptr = lattice_object_create(tableName) ?: return 0L
-        return ptr.rawValue.toLong()
+    actual fun createObjectWithSchema(tableName: String, schemaJson: String): Long = memScoped {
+        if (schemaJson.isEmpty()) {
+            val ptr = lattice_object_create(tableName) ?: return 0L
+            return ptr.rawValue.toLong()
+        }
+
+        // Parse schema JSON: [{"name":"...", "type":N, "kind":N, "nullable":B, ...}, ...]
+        // Build C property array from JSON
+        try {
+            // Simple JSON parsing (schemaJson is a JSON array of property objects)
+            val trimmed = schemaJson.trim().removePrefix("[").removeSuffix("]")
+            val entries = mutableListOf<Map<String, String>>()
+
+            // Split by },{ pattern
+            var depth = 0
+            var current = StringBuilder()
+            for (c in trimmed) {
+                when (c) {
+                    '{' -> { depth++; current.append(c) }
+                    '}' -> {
+                        depth--
+                        current.append(c)
+                        if (depth == 0) {
+                            val entry = mutableMapOf<String, String>()
+                            val pairs = current.toString()
+                                .removePrefix("{").removeSuffix("}")
+                                .split(",")
+                            for (pair in pairs) {
+                                val kv = pair.split(":", limit = 2)
+                                if (kv.size == 2) {
+                                    val key = kv[0].trim().removeSurrounding("\"")
+                                    val value = kv[1].trim().removeSurrounding("\"")
+                                    entry[key] = value
+                                }
+                            }
+                            entries.add(entry)
+                            current = StringBuilder()
+                        }
+                    }
+                    ',' -> if (depth == 0) { /* skip comma between objects */ } else current.append(c)
+                    else -> current.append(c)
+                }
+            }
+
+            if (entries.isEmpty()) {
+                val ptr = lattice_object_create(tableName) ?: return 0L
+                return ptr.rawValue.toLong()
+            }
+
+            val props = allocArray<lattice_property_t>(entries.size)
+            for (i in entries.indices) {
+                val e = entries[i]
+                props[i].name = e["name"]?.cstr?.ptr
+                props[i].type = (e["type"]?.toIntOrNull() ?: 2).toUInt()
+                props[i].kind = (e["kind"]?.toIntOrNull() ?: 0).toUInt()
+                props[i].nullable = e["nullable"]?.toBooleanStrictOrNull() ?: false
+                props[i].target_table = e["target_table"]?.takeIf { it.isNotEmpty() && it != "null" }?.cstr?.ptr
+                props[i].link_table = e["link_table"]?.takeIf { it.isNotEmpty() && it != "null" }?.cstr?.ptr
+                props[i].is_indexed = false
+                props[i].is_unique = false
+                props[i].is_full_text = false
+                props[i].is_vector = false
+                props[i].is_geo_bounds = false
+                props[i].column_name = null
+            }
+
+            val ptr = lattice_object_create_with_schema(tableName, props, entries.size.toULong()) ?: return 0L
+            return ptr.rawValue.toLong()
+        } catch (e: Exception) {
+            // Fallback to simple creation
+            val ptr = lattice_object_create(tableName) ?: return 0L
+            return ptr.rawValue.toLong()
+        }
     }
 
     // ========== Sync Operations ==========
@@ -392,6 +471,16 @@ internal actual object NativeBridge {
     actual fun markSynced(dbHandle: Long, globalIdsJson: String) {
         val db = dbHandle.toDbPtr() ?: return
         lattice_db_mark_synced(db, globalIdsJson)
+    }
+
+    actual fun compactAuditLog(dbHandle: Long): Long {
+        val db = dbHandle.toDbPtr() ?: return 0L
+        return lattice_db_compact_audit_log(db)
+    }
+
+    actual fun isSyncConnected(dbHandle: Long): Boolean {
+        val db = dbHandle.toDbPtr() ?: return false
+        return lattice_db_is_sync_connected(db)
     }
 
     // ========== Results Operations ==========
@@ -455,5 +544,66 @@ internal actual object NativeBridge {
         if (ptr == 0L) return
         val cstr: CPointer<ByteVar> = interpretCPointer(ptr.toNativePtr()) ?: return
         lattice_string_free(cstr)
+    }
+
+    // ========== Query Extensions ==========
+
+    actual fun queryDistinct(
+        dbHandle: Long,
+        tableName: String,
+        distinctBy: String?,
+        whereClause: String?,
+        orderBy: String?,
+        limit: Long,
+        offset: Long
+    ): Long {
+        val db = dbHandle.toDbPtr() ?: return 0L
+        val results = lattice_db_query_distinct(
+            db, tableName, distinctBy, whereClause, orderBy, limit, offset
+        ) ?: return 0L
+        return results.rawValue.toLong()
+    }
+
+    actual fun countDistinct(
+        dbHandle: Long,
+        tableName: String,
+        whereClause: String?,
+        groupBy: String?,
+        distinctBy: String?
+    ): Int {
+        val db = dbHandle.toDbPtr() ?: return 0
+        return lattice_db_count_distinct(db, tableName, whereClause, groupBy, distinctBy).toInt()
+    }
+
+    actual fun queryFts(
+        dbHandle: Long,
+        tableName: String,
+        columnName: String,
+        matchExpression: String,
+        orderBy: String?,
+        limit: Long
+    ): Long {
+        val db = dbHandle.toDbPtr() ?: return 0L
+        val results = lattice_db_query_fts(
+            db, tableName, columnName, matchExpression, orderBy, limit
+        ) ?: return 0L
+        return results.rawValue.toLong()
+    }
+
+    // ========== Database Attachment ==========
+
+    actual fun attachDb(dbHandle: Long, otherHandle: Long): Boolean {
+        val db = dbHandle.toDbPtr() ?: return false
+        val other = otherHandle.toDbPtr() ?: return false
+        return lattice_db_attach(db, other) == LATTICE_OK
+    }
+
+    // ========== Add with preserved global ID ==========
+
+    actual fun addObjectWithGlobalId(dbHandle: Long, objectHandle: Long, globalId: String): Long {
+        val db = dbHandle.toDbPtr() ?: return 0L
+        val obj = objectHandle.toObjectPtr() ?: return 0L
+        val result = lattice_db_add_with_global_id(db, obj, globalId) ?: return 0L
+        return result.rawValue.toLong()
     }
 }

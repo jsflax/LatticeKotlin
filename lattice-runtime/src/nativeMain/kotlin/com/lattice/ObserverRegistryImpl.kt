@@ -63,6 +63,40 @@ internal actual object ObserverRegistry {
         return ObservationToken(db, tableName, token, stableRef)
     }
 
+    actual fun observeTableRaw(
+        dbHandle: Long,
+        tableName: String,
+        callback: (operation: String, rowId: Long, globalId: String) -> Unit
+    ): Long {
+        val db = dbHandle.toDbPtr() ?: return 0L
+
+        class RawObserverContext(val callback: (String, Long, String) -> Unit)
+
+        val context = RawObserverContext(callback)
+        val stableRef = StableRef.create(context)
+
+        val token = lattice_db_observe_table(
+            db,
+            tableName,
+            stableRef.asCPointer(),
+            staticCFunction { contextPtr, operation, rowId, globalId ->
+                val ctx = contextPtr!!.asStableRef<RawObserverContext>().get()
+                val opStr = operation?.toKString() ?: "UNKNOWN"
+                val gidStr = globalId?.toKString() ?: ""
+                ctx.callback(opStr, rowId, gidStr)
+            }
+        )
+
+        if (token == 0UL) {
+            stableRef.dispose()
+            return 0L
+        }
+
+        // Note: stableRef is intentionally NOT disposed here — it lives as long as the observer.
+        // It will be cleaned up when the database is closed.
+        return token.toLong()
+    }
+
     /**
      * Internal observation token that wraps the C++ observer.
      */

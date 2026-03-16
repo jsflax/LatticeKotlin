@@ -64,4 +64,16 @@ internal expect object ObserverRegistry {
         whereClause: String?,
         callback: (CollectionChange) -> Unit
     ): Cancellable
+
+    /**
+     * Register a raw table observer that receives operation, rowId, globalId strings.
+     * Used for AuditLog observation (changeStream).
+     *
+     * @return Observer token (0 on failure)
+     */
+    fun observeTableRaw(
+        dbHandle: Long,
+        tableName: String,
+        callback: (operation: String, rowId: Long, globalId: String) -> Unit
+    ): Long
 }

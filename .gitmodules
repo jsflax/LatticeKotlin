@@ -1,0 +1,4 @@
+[submodule "LatticeCore"]
+	path = LatticeCore
+	url = https://github.com/jsflax/LatticeCore.git
+	branch = main

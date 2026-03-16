@@ -16,7 +16,9 @@ enum class LatticeType {
 enum class LatticePropertyKind {
     PRIMITIVE,
     LINK,
-    LINK_LIST
+    LINK_LIST,
+    VIRTUAL_LIST,
+    VIRTUAL_LINK
 }
 
 /**
@@ -28,7 +30,13 @@ data class LatticePropertyDescriptor(
     val kind: LatticePropertyKind = LatticePropertyKind.PRIMITIVE,
     val nullable: Boolean = false,
     val targetTable: String? = null,  // For links
-    val linkTable: String? = null     // For link lists
+    val linkTable: String? = null,    // For link lists
+    val isIndexed: Boolean = false,   // Create non-unique index
+    val isUnique: Boolean = false,    // Create unique constraint
+    val isFullText: Boolean = false,  // Create FTS5 virtual table
+    val isVector: Boolean = false,    // Create vec0 virtual table
+    val isGeoBounds: Boolean = false, // Create R*Tree virtual table
+    val columnName: String? = null    // Custom column name mapping
 )
 
 /**
@@ -68,4 +76,27 @@ interface LatticeObject {
      */
     val isManaged: Boolean
         get() = _latticeHandle != 0L
+
+    /**
+     * The globally unique identifier for this object.
+     * Available after the object has been added to a database.
+     * Returns null if the object is unmanaged or has no globalId.
+     */
+    val globalId: String?
+        get() {
+            if (_latticeHandle == 0L) return null
+            return NativeBridge.getStringProperty(_latticeHandle, "globalId")
+                .takeIf { it?.isNotEmpty() == true }
+        }
+
+    /**
+     * The primary key (row ID) for this object.
+     * Available after the object has been added to a database.
+     * Returns 0 if the object is unmanaged.
+     */
+    val id: Long
+        get() {
+            if (_latticeHandle == 0L) return 0L
+            return NativeBridge.getIntProperty(_latticeHandle, "id")
+        }
 }

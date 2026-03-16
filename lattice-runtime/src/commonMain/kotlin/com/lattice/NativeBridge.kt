@@ -53,6 +53,9 @@ internal expect object NativeBridge {
     ): Long
 
     /** Close and release database. */
+    /** Explicitly close DB connections and stop background services. Call before release. */
+    fun closeDb(dbHandle: Long)
+
     fun releaseDb(dbHandle: Long)
 
     /** Get last error message. */
@@ -186,6 +189,12 @@ internal expect object NativeBridge {
     /** Mark entries as synchronized. */
     fun markSynced(dbHandle: Long, globalIdsJson: String)
 
+    /** Compact audit log — replace history with current state INSERTs. Returns entry count. */
+    fun compactAuditLog(dbHandle: Long): Long
+
+    /** Check if sync WebSocket is connected. */
+    fun isSyncConnected(dbHandle: Long): Boolean
+
     // ========== Results Operations ==========
 
     /** Get count of query results. */
@@ -221,4 +230,46 @@ internal expect object NativeBridge {
 
     /** Free a string returned by native code. */
     fun freeString(ptr: Long)
+
+    // ========== Query Extensions ==========
+
+    /** Query with DISTINCT (GROUP BY) on a column. Returns results handle. */
+    fun queryDistinct(
+        dbHandle: Long,
+        tableName: String,
+        distinctBy: String?,
+        whereClause: String?,
+        orderBy: String?,
+        limit: Long,
+        offset: Long
+    ): Long
+
+    /** Count with DISTINCT/GROUP BY support. */
+    fun countDistinct(
+        dbHandle: Long,
+        tableName: String,
+        whereClause: String?,
+        groupBy: String?,
+        distinctBy: String?
+    ): Int
+
+    /** Full-text search query. Returns results handle. */
+    fun queryFts(
+        dbHandle: Long,
+        tableName: String,
+        columnName: String,
+        matchExpression: String,
+        orderBy: String?,
+        limit: Long
+    ): Long
+
+    // ========== Database Attachment ==========
+
+    /** Attach another database for cross-DB queries. */
+    fun attachDb(dbHandle: Long, otherHandle: Long): Boolean
+
+    // ========== Add with preserved global ID ==========
+
+    /** Add an object with a specific globalId. Returns object handle. */
+    fun addObjectWithGlobalId(dbHandle: Long, objectHandle: Long, globalId: String): Long
 }

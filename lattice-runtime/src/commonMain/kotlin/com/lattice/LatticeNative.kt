@@ -459,20 +459,34 @@ object LatticeNative {
     }
 
     private fun buildSchemaJson(tableName: String, schema: List<LatticePropertyDescriptor>): String {
+        // Build a flat JSON array of property objects (matches NativeBridgeImpl parser)
         val sb = StringBuilder()
-        sb.append("{\"table_name\":\"$tableName\",\"properties\":[")
+        sb.append("[")
         schema.forEachIndexed { index, prop ->
             if (index > 0) sb.append(",")
+            val typeInt = when (prop.type) {
+                LatticeType.INTEGER -> 0
+                LatticeType.REAL -> 1
+                LatticeType.TEXT -> 2
+                LatticeType.BLOB -> 3
+            }
+            val kindInt = when (prop.kind) {
+                LatticePropertyKind.PRIMITIVE -> 0
+                LatticePropertyKind.LINK -> 1
+                LatticePropertyKind.LINK_LIST -> 2
+                LatticePropertyKind.VIRTUAL_LIST -> 3
+                LatticePropertyKind.VIRTUAL_LINK -> 4
+            }
             sb.append("{")
             sb.append("\"name\":\"${prop.name}\",")
-            sb.append("\"type\":\"${prop.type.name}\",")
-            sb.append("\"kind\":\"${prop.kind.name}\",")
+            sb.append("\"type\":$typeInt,")
+            sb.append("\"kind\":$kindInt,")
             sb.append("\"nullable\":${prop.nullable}")
             prop.targetTable?.let { sb.append(",\"target_table\":\"$it\"") }
             prop.linkTable?.let { sb.append(",\"link_table\":\"$it\"") }
             sb.append("}")
         }
-        sb.append("]}")
+        sb.append("]")
         return sb.toString()
     }
 }

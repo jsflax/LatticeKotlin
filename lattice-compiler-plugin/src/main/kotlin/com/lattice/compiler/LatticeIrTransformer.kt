@@ -457,8 +457,11 @@ class LatticeIrTransformer(
     ) {
         val tableName = irClass.name.asString()
 
-        // Find createObject function (without schema - schema is passed at DB creation time)
-        val createObjectFn = findLatticeNativeFunction(latticeNativeSymbol, "createObject")
+        // Find createObjectWithSchema(tableName, schema) to create C++ object with property types
+        val createObjectWithSchemaFn = findLatticeNativeFunction(latticeNativeSymbol, "createObjectWithSchema")
+        // Fallback to createObject if createObjectWithSchema not found
+        val createObjectFn = createObjectWithSchemaFn
+            ?: findLatticeNativeFunction(latticeNativeSymbol, "createObject")
         if (createObjectFn == null) {
             messageCollector.report(
                 CompilerMessageSeverity.WARNING,
@@ -466,6 +469,9 @@ class LatticeIrTransformer(
             )
             return
         }
+
+        // Find the _latticeSchema property to pass to createObjectWithSchema
+        val schemaProperty = irClass.properties.find { it.name.asString() == "_latticeSchema" }
 
         // Create anonymous initializer
         val initBlock = irFactory.createAnonymousInitializer(
@@ -479,11 +485,21 @@ class LatticeIrTransformer(
             body = DeclarationIrBuilder(pluginContext, symbol).irBlockBody {
                 val thisReceiver = irClass.thisReceiver!!
 
-                // _latticeHandle = LatticeNative.createObject("Trip")
-                // Schema is passed at database creation time, not per-object
-                val createCall = irCall(createObjectFn).apply {
-                    dispatchReceiver = irGetObject(latticeNativeSymbol)
-                    putValueArgument(0, irString(tableName))
+                // _latticeHandle = LatticeNative.createObjectWithSchema("Trip", _latticeSchema)
+                // Passing schema ensures C++ object has property type info for INSERT
+                val createCall = if (createObjectWithSchemaFn != null && schemaProperty?.getter != null) {
+                    irCall(createObjectWithSchemaFn).apply {
+                        dispatchReceiver = irGetObject(latticeNativeSymbol)
+                        putValueArgument(0, irString(tableName))
+                        putValueArgument(1, irCall(schemaProperty.getter!!).apply {
+                            dispatchReceiver = irGet(thisReceiver)
+                        })
+                    }
+                } else {
+                    irCall(createObjectFn).apply {
+                        dispatchReceiver = irGetObject(latticeNativeSymbol)
+                        putValueArgument(0, irString(tableName))
+                    }
                 }
                 +irSetField(irGet(thisReceiver), handleField, createCall)
 
