@@ -221,6 +221,9 @@ class LatticeIrTransformer(
             transformProperty(declaration, property, handleField, latticeNative)
         }
 
+        // Register factory so Lattice and VirtualModelRegistry can create instances
+        addFactoryRegistration(declaration)
+
         return super.visitClassNew(declaration)
     }
 
@@ -235,6 +238,14 @@ class LatticeIrTransformer(
      *   }
      */
     private fun addFactoryRegistration(irClass: IrClass) {
+        // Find VirtualModelRegistry for table-based factory registration
+        val virtualModelRegistryClass = pluginContext.referenceClass(
+            ClassId.topLevel(FqName("com.lattice.VirtualModelRegistry"))
+        )
+        val registerTableFactoryFn = virtualModelRegistryClass?.owner?.declarations
+            ?.filterIsInstance<IrSimpleFunction>()
+            ?.find { it.name.asString() == "registerTableFactory" }
+
         // Find Lattice class
         val latticeClass = pluginContext.referenceClass(ClassId.topLevel(FqName("com.lattice.Lattice")))
         if (latticeClass == null) {
@@ -267,31 +278,19 @@ class LatticeIrTransformer(
             .find { it.isCompanion }
 
         if (companion == null) {
-            // Create companion object
-            companion = irFactory.createClass(
-                startOffset = UNDEFINED_OFFSET,
-                endOffset = UNDEFINED_OFFSET,
-                origin = LatticeDeclarationOrigin,
-                name = Name.identifier("Companion"),
-                visibility = DescriptorVisibilities.PUBLIC,
-                symbol = IrClassSymbolImpl(),
-                kind = org.jetbrains.kotlin.descriptors.ClassKind.OBJECT,
-                modality = Modality.FINAL,
-                isCompanion = true,
-                isInner = false,
-                isData = false,
-                isExternal = false,
-                isValue = false,
-                isExpect = false,
-                isFun = false
-            ).apply {
-                parent = irClass
-                createImplicitParameterDeclarationWithWrappedDescriptor()
-
-                // Add to parent class
-                irClass.declarations.add(this)
-            }
+            // Skip companion creation — factory registration will be handled
+            // via reflection on JVM/Android (createFactoryViaReflection).
+            // Creating a companion in the IR transformer causes ObjectClassLowering
+            // assertions because the companion needs proper thisReceiver/superTypes setup.
+            messageCollector.report(
+                CompilerMessageSeverity.WARNING,
+                "Lattice: Skipping factory registration for '${irClass.name}' (no companion object, will use reflection)"
+            )
+            return
         }
+
+        // NOTE: Companion object creation removed — it caused ObjectClassLowering assertion
+        // failures because the IR companion lacked proper thisReceiver/superTypes setup.
 
         // Find primary constructor of the model class
         val modelConstructor = irClass.primaryConstructor
@@ -370,6 +369,56 @@ class LatticeIrTransformer(
                     }
                     putValueArgument(0, kClassRef)
                     putValueArgument(1, lambdaExpr)
+                }
+
+                // Also register with VirtualModelRegistry for VirtualList type resolution
+                // VirtualModelRegistry.registerTableFactory("ClassName") { ClassName() }
+                if (registerTableFactoryFn != null && virtualModelRegistryClass != null) {
+                    // Create a separate lambda for the VirtualModelRegistry registration
+                    // The return type needs to be LatticeObject for registerTableFactory
+                    val latticeObjectClass = pluginContext.referenceClass(
+                        ClassId.topLevel(FqName("com.lattice.LatticeObject"))
+                    )
+                    if (latticeObjectClass != null) {
+                        val vmrLambdaType = pluginContext.irBuiltIns.functionN(0).typeWith(latticeObjectClass.defaultType)
+
+                        val vmrLambdaFn = irFactory.createSimpleFunction(
+                            startOffset = UNDEFINED_OFFSET,
+                            endOffset = UNDEFINED_OFFSET,
+                            origin = LatticeDeclarationOrigin,
+                            name = Name.special("<anonymous>"),
+                            visibility = DescriptorVisibilities.LOCAL,
+                            isInline = false,
+                            isExpect = false,
+                            returnType = latticeObjectClass.defaultType,
+                            modality = Modality.FINAL,
+                            symbol = IrSimpleFunctionSymbolImpl(),
+                            isTailrec = false,
+                            isSuspend = false,
+                            isOperator = false,
+                            isInfix = false,
+                            isExternal = false
+                        ).apply {
+                            parent = this@irBlockBody.scope.getLocalDeclarationParent()
+                            body = DeclarationIrBuilder(pluginContext, this.symbol).irBlockBody {
+                                +irReturn(irCallConstructor(modelConstructor.symbol, emptyList()))
+                            }
+                        }
+
+                        val vmrLambdaExpr = IrFunctionExpressionImpl(
+                            startOffset = UNDEFINED_OFFSET,
+                            endOffset = UNDEFINED_OFFSET,
+                            type = vmrLambdaType,
+                            function = vmrLambdaFn,
+                            origin = IrStatementOrigin.LAMBDA
+                        )
+
+                        +irCall(registerTableFactoryFn).apply {
+                            dispatchReceiver = irGetObject(virtualModelRegistryClass)
+                            putValueArgument(0, irString(irClass.name.asString()))
+                            putValueArgument(1, vmrLambdaExpr)
+                        }
+                    }
                 }
             }
         }
@@ -517,6 +566,29 @@ class LatticeIrTransformer(
 
                     // Skip LatticeList properties (detected by type)
                     if (propType.classOrNull?.owner?.name?.asString() == "LatticeList") {
+                        return@forEach
+                    }
+
+                    // Skip VirtualList properties (detected by type)
+                    if (propType.classOrNull?.owner?.name?.asString() == "VirtualList") {
+                        return@forEach
+                    }
+
+                    // Handle native collection properties (List, Set, Map — stored as JSON TEXT)
+                    if (isNativeCollection(propType)) {
+                        val setterName = getCollectionSetterName(propType)
+                        if (setterName != null) {
+                            val collectionSetter = findLatticeNativeFunction(latticeNativeSymbol, setterName)
+                            if (collectionSetter != null) {
+                                val initialValue = irGetField(irGet(thisReceiver), backingField)
+                                +irCall(collectionSetter).apply {
+                                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                                    putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
+                                    putValueArgument(1, irString(propName))
+                                    putValueArgument(2, initialValue)
+                                }
+                            }
+                        }
                         return@forEach
                     }
 
@@ -708,6 +780,29 @@ class LatticeIrTransformer(
                     return@forEach
                 }
 
+                // Skip VirtualList properties
+                if (propType.classOrNull?.owner?.name?.asString() == "VirtualList") {
+                    return@forEach
+                }
+
+                // Handle native collection properties (List, Set, Map — stored as JSON TEXT)
+                if (isNativeCollection(propType)) {
+                    val setterName = getCollectionSetterName(propType)
+                    if (setterName != null) {
+                        val collectionSetter = findLatticeNativeFunction(latticeNativeSymbol, setterName)
+                        if (collectionSetter != null) {
+                            val fieldValue = irGetField(irGet(thisReceiver), backingField)
+                            +irCall(collectionSetter).apply {
+                                dispatchReceiver = irGetObject(latticeNativeSymbol)
+                                putValueArgument(0, irGet(nativeHandleParam))
+                                putValueArgument(1, irString(propName))
+                                putValueArgument(2, fieldValue)
+                            }
+                        }
+                    }
+                    return@forEach
+                }
+
                 // Skip embedded properties
                 val baseType = if (propType.isNullable()) propType.makeNotNull() else propType
                 val isEmbedded = baseType.classOrNull?.owner?.hasAnnotation(embeddedAnnotationFqn) == true
@@ -848,13 +943,29 @@ class LatticeIrTransformer(
         property: IrProperty,
         userProperties: List<IrProperty>
     ) {
-        val descriptorClass = latticePropertyDescriptorClass ?: return
-        val typeClass = latticeTypeClass ?: return
-        val kindClass = latticePropertyKindClass ?: return
+        val descriptorClass = latticePropertyDescriptorClass
+        if (descriptorClass == null) {
+            messageCollector.report(CompilerMessageSeverity.WARNING, "Lattice: Cannot find LatticePropertyDescriptor class — _latticeSchema will be empty")
+            return
+        }
+        val typeClass = latticeTypeClass
+        if (typeClass == null) {
+            messageCollector.report(CompilerMessageSeverity.WARNING, "Lattice: Cannot find LatticeType enum — _latticeSchema will be empty")
+            return
+        }
+        val kindClass = latticePropertyKindClass
+        if (kindClass == null) {
+            messageCollector.report(CompilerMessageSeverity.WARNING, "Lattice: Cannot find LatticePropertyKind enum — _latticeSchema will be empty")
+            return
+        }
 
-        // Find the LatticePropertyDescriptor constructor
-        val descriptorConstructor = descriptorClass.owner.constructors.firstOrNull()
-            ?: return
+        // Find the LatticePropertyDescriptor primary constructor
+        val descriptorConstructor = descriptorClass.owner.constructors.find { it.isPrimary }
+            ?: descriptorClass.owner.constructors.firstOrNull()
+        if (descriptorConstructor == null) {
+            messageCollector.report(CompilerMessageSeverity.WARNING, "Lattice: Cannot find LatticePropertyDescriptor constructor — _latticeSchema will be empty")
+            return
+        }
 
         // Find enum entries for LatticeType
         fun getTypeEnumEntry(name: String): IrEnumEntry? =
@@ -875,8 +986,9 @@ class LatticeIrTransformer(
                     val propType = backingField.type
                     val isNullable = propType.isNullable()
 
-                    // Check if this is a @Link property or LatticeList type
+                    // Check if this is a @Link property, LatticeList type, or VirtualList type
                     val isLink = prop.hasAnnotation(linkAnnotationFqn)
+                    val isVirtualList = propType.classOrNull?.owner?.name?.asString() == "VirtualList"
                     val isLinkList = prop.hasAnnotation(linkListAnnotationFqn) ||
                         propType.classOrNull?.owner?.name?.asString() == "LatticeList"
 
@@ -890,6 +1002,10 @@ class LatticeIrTransformer(
                         val baseType = if (isNullable) propType.makeNotNull() else propType
                         val targetClass = baseType.classOrNull?.owner
                         targetTableName = targetClass?.name?.asString()
+                    } else if (isVirtualList) {
+                        kindName = "VIRTUAL_LIST"
+                        // VirtualList has no single target table — empty target, parent class as link table
+                        targetTableName = null
                     } else if (isLinkList) {
                         kindName = "LINK_LIST"
                         // Extract element type from LatticeList<T>
@@ -906,7 +1022,7 @@ class LatticeIrTransformer(
                     // Determine LatticeType based on property type
                     val baseForType = if (isNullable) propType.makeNotNull() else propType
                     val latticeTypeName = when {
-                        isLink || isLinkList -> "INTEGER" // Links are stored as foreign key IDs
+                        isLink || isLinkList || isVirtualList -> "INTEGER" // Links are stored as foreign key IDs
                         propType.isString() || (isNullable && baseForType.isString()) -> "TEXT"
                         propType.isInt() || (isNullable && baseForType.isInt()) -> "INTEGER"
                         propType.isLong() || (isNullable && baseForType.isLong()) -> "INTEGER"
@@ -990,10 +1106,14 @@ class LatticeIrTransformer(
         // Keep backing field for initial values (copied to C++ in init block)
         // Don't rename - it's only used during initialization
 
-        // Check if this is a @Link property or LatticeList type
+        // Check if this is a @Link property, VirtualList type, or LatticeList type
         val isLink = property.hasAnnotation(linkAnnotationFqn)
+        val isVirtualList = propertyType.classOrNull?.owner?.name?.asString() == "VirtualList"
         val isLinkList = property.hasAnnotation(linkListAnnotationFqn) ||
             propertyType.classOrNull?.owner?.name?.asString() == "LatticeList"
+
+        // Check if native collection type (List, Set, Map — skip transformation, use backing field)
+        val isNativeCollection = isNativeCollection(propertyType)
 
         // Check if the property type is an @Embedded type
         val baseType = if (propertyType.isNullable()) propertyType.makeNotNull() else propertyType
@@ -1002,13 +1122,30 @@ class LatticeIrTransformer(
         // Check if the property type is a @LatticeEnum type
         val isEnum = isLatticeEnum(baseType)
 
-        if (isLink) {
+        if (isNativeCollection) {
+            // Native collections (List, Set, Map) stored as JSON TEXT via KSerializer.
+            // Mirrors Swift PrimitiveProperty conformance for Array/Set/Dictionary.
+            property.getter?.let { getter ->
+                transformCollectionGetter(irClass, getter, handleField, backingField, propertyName, propertyType, latticeNativeSymbol)
+            }
+            property.setter?.let { setter ->
+                transformCollectionSetter(irClass, setter, handleField, backingField, propertyName, propertyType, latticeNativeSymbol)
+            }
+        } else if (isLink) {
             // Transform as a link property
             property.getter?.let { getter ->
                 transformLinkGetter(irClass, getter, handleField, propertyName, propertyType, latticeNativeSymbol)
             }
             property.setter?.let { setter ->
                 transformLinkSetter(irClass, setter, handleField, propertyName, propertyType, latticeNativeSymbol)
+            }
+        } else if (isVirtualList) {
+            // Transform as a virtual list property (polymorphic link list)
+            property.getter?.let { getter ->
+                transformVirtualListGetter(irClass, getter, handleField, propertyName, propertyType, latticeNativeSymbol)
+            }
+            property.setter?.let { setter ->
+                transformVirtualListSetter(irClass, setter, handleField, propertyName, propertyType, latticeNativeSymbol)
             }
         } else if (isLinkList) {
             // Transform as a link list property
@@ -1441,6 +1578,133 @@ class LatticeIrTransformer(
     }
 
     /**
+     * Transform a VirtualList property getter.
+     * Gets the link list handle from C++ and configures a VirtualList wrapper.
+     * Unlike LatticeList, VirtualList does NOT call setElementClass — it resolves
+     * types at runtime via table name using VirtualModelRegistry.
+     *
+     * Generated code:
+     *   val list = VirtualList<T>()
+     *   list._nativeHandle = LatticeNative.getLinkListHandle(_latticeHandle, "propertyName")
+     *   return list
+     */
+    private fun transformVirtualListGetter(
+        irClass: IrClass,
+        getter: IrSimpleFunction,
+        handleField: IrField,
+        propertyName: String,
+        propertyType: IrType,
+        latticeNativeSymbol: IrClassSymbol
+    ) {
+        val getLinkListHandle = findLatticeNativeFunction(latticeNativeSymbol, "getLinkListHandle")
+        if (getLinkListHandle == null) {
+            messageCollector.report(
+                CompilerMessageSeverity.WARNING,
+                "Lattice: Cannot find LatticeNative.getLinkListHandle for virtual list '$propertyName', skipping"
+            )
+            return
+        }
+
+        // Find VirtualList class
+        val virtualListClass = pluginContext.referenceClass(
+            ClassId.topLevel(FqName("com.lattice.VirtualList"))
+        )
+        if (virtualListClass == null) {
+            messageCollector.report(
+                CompilerMessageSeverity.WARNING,
+                "Lattice: Cannot find VirtualList class for '$propertyName', skipping"
+            )
+            return
+        }
+
+        // Get the element type from VirtualList<T>
+        val listTypeArg = propertyType.let { pt ->
+            if (pt is org.jetbrains.kotlin.ir.types.IrSimpleType) {
+                pt.arguments.firstOrNull()?.typeOrNull
+            } else null
+        }
+
+        if (listTypeArg == null) {
+            messageCollector.report(
+                CompilerMessageSeverity.WARNING,
+                "Lattice: Cannot determine element type for virtual list '$propertyName', skipping"
+            )
+            return
+        }
+
+        // Find VirtualList constructor
+        val virtualListConstructor = virtualListClass.owner.constructors.firstOrNull()
+        if (virtualListConstructor == null) {
+            messageCollector.report(
+                CompilerMessageSeverity.WARNING,
+                "Lattice: Cannot find VirtualList constructor for '$propertyName'"
+            )
+            return
+        }
+
+        // Find _nativeHandle property on VirtualList
+        val nativeHandleProp = virtualListClass.owner.properties.find { it.name.asString() == "_nativeHandle" }
+        if (nativeHandleProp == null) {
+            messageCollector.report(
+                CompilerMessageSeverity.WARNING,
+                "Lattice: Cannot find VirtualList._nativeHandle for '$propertyName'"
+            )
+            return
+        }
+
+        getter.body = DeclarationIrBuilder(pluginContext, getter.symbol).irBlockBody {
+            val thisReceiver = getter.dispatchReceiverParameter!!
+
+            // val list = VirtualList<T>()
+            val listInstance = irTemporary(
+                irCallConstructor(virtualListConstructor.symbol, listOf(listTypeArg)),
+                nameHint = "virtualList"
+            )
+
+            // list._nativeHandle = LatticeNative.getLinkListHandle(_latticeHandle, "propertyName")
+            val handleValue = irCall(getLinkListHandle).apply {
+                dispatchReceiver = irGetObject(latticeNativeSymbol)
+                putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
+                putValueArgument(1, irString(propertyName))
+            }
+
+            val handleSetter = nativeHandleProp.setter
+            if (handleSetter != null) {
+                +irCall(handleSetter).apply {
+                    dispatchReceiver = irGet(listInstance)
+                    putValueArgument(0, handleValue)
+                }
+            }
+
+            // Do NOT call setElementClass — VirtualList resolves types at runtime via table name
+
+            // return list
+            +irReturn(irGet(listInstance))
+        }
+    }
+
+    /**
+     * Transform a VirtualList property setter.
+     * This is a no-op since list modifications happen through the list object itself.
+     */
+    private fun transformVirtualListSetter(
+        irClass: IrClass,
+        setter: IrSimpleFunction,
+        handleField: IrField,
+        propertyName: String,
+        propertyType: IrType,
+        latticeNativeSymbol: IrClassSymbol
+    ) {
+        // For virtual lists, setting is handled by modifying the list directly
+        // The setter is a no-op
+        val valueParam = setter.valueParameters.firstOrNull() ?: return
+
+        setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {
+            // No-op — list modifications happen through the list object
+        }
+    }
+
+    /**
      * Transform an embedded model property getter.
      * Reads JSON from C++ and decodes it using the registered serializer.
      *
@@ -1550,6 +1814,109 @@ class LatticeIrTransformer(
                 putValueArgument(1, irString(propertyName))
                 putValueArgument(2, irGet(valueParam))
                 putValueArgument(3, kClassRef)
+            }
+        }
+    }
+
+    /**
+     * Determine the LatticeNative getter method name for a collection type.
+     * Returns null if the collection type is not supported.
+     */
+    private fun getCollectionGetterName(type: IrType): String? {
+        val className = type.classOrNull?.owner?.name?.asString() ?: return null
+        val elementType = (type as? org.jetbrains.kotlin.ir.types.IrSimpleType)
+            ?.arguments?.firstOrNull()?.typeOrNull
+
+        return when {
+            className in setOf("List", "MutableList", "ArrayList") && elementType?.isString() == true -> "getStringList"
+            className in setOf("Set", "MutableSet", "HashSet", "LinkedHashSet") && elementType?.isString() == true -> "getStringSet"
+            className in setOf("Map", "MutableMap", "HashMap", "LinkedHashMap") -> "getStringStringMap"
+            else -> null // Unsupported collection type — stays in backing field
+        }
+    }
+
+    private fun getCollectionSetterName(type: IrType): String? {
+        val className = type.classOrNull?.owner?.name?.asString() ?: return null
+        val elementType = (type as? org.jetbrains.kotlin.ir.types.IrSimpleType)
+            ?.arguments?.firstOrNull()?.typeOrNull
+
+        return when {
+            className in setOf("List", "MutableList", "ArrayList") && elementType?.isString() == true -> "setStringList"
+            className in setOf("Set", "MutableSet", "HashSet", "LinkedHashSet") && elementType?.isString() == true -> "setStringSet"
+            className in setOf("Map", "MutableMap", "HashMap", "LinkedHashMap") -> "setStringStringMap"
+            else -> null
+        }
+    }
+
+    /**
+     * Transform a native collection property getter.
+     * Calls LatticeNative.getStringList/getStringSet/getStringStringMap.
+     */
+    private fun transformCollectionGetter(
+        irClass: IrClass,
+        getter: IrSimpleFunction,
+        handleField: IrField,
+        backingField: IrField,
+        propertyName: String,
+        propertyType: IrType,
+        latticeNativeSymbol: IrClassSymbol
+    ) {
+        val getterName = getCollectionGetterName(propertyType)
+        if (getterName == null) {
+            // Unsupported collection type — leave getter as-is (uses backing field)
+            messageCollector.report(
+                CompilerMessageSeverity.WARNING,
+                "Lattice: Unsupported collection type for '$propertyName', using backing field"
+            )
+            return
+        }
+
+        val nativeGetter = findLatticeNativeFunction(latticeNativeSymbol, getterName) ?: return
+
+        getter.body = DeclarationIrBuilder(pluginContext, getter.symbol).irBlockBody {
+            val thisReceiver = getter.dispatchReceiverParameter!!
+            +irReturn(
+                irCall(nativeGetter).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
+                    putValueArgument(1, irString(propertyName))
+                }
+            )
+        }
+    }
+
+    /**
+     * Transform a native collection property setter.
+     * Calls LatticeNative.setStringList/setStringSet/setStringStringMap.
+     */
+    private fun transformCollectionSetter(
+        irClass: IrClass,
+        setter: IrSimpleFunction,
+        handleField: IrField,
+        backingField: IrField,
+        propertyName: String,
+        propertyType: IrType,
+        latticeNativeSymbol: IrClassSymbol
+    ) {
+        val setterName = getCollectionSetterName(propertyType)
+        if (setterName == null) {
+            messageCollector.report(
+                CompilerMessageSeverity.WARNING,
+                "Lattice: Unsupported collection type for setter '$propertyName', using backing field"
+            )
+            return
+        }
+
+        val nativeSetter = findLatticeNativeFunction(latticeNativeSymbol, setterName) ?: return
+        val valueParam = setter.valueParameters.firstOrNull() ?: return
+
+        setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {
+            val thisReceiver = setter.dispatchReceiverParameter!!
+            +irCall(nativeSetter).apply {
+                dispatchReceiver = irGetObject(latticeNativeSymbol)
+                putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
+                putValueArgument(1, irString(propertyName))
+                putValueArgument(2, irGet(valueParam))
             }
         }
     }
@@ -1907,6 +2274,19 @@ class LatticeIrTransformer(
             isUuid(baseType) -> "setUuid"
             else -> "setString" // Fallback
         }
+    }
+
+    /**
+     * Check if the type is a native collection (List, MutableList, Set, Map, etc.)
+     * that should be serialized as JSON TEXT in Lattice.
+     */
+    private fun isNativeCollection(type: IrType): Boolean {
+        val className = type.classOrNull?.owner?.name?.asString() ?: return false
+        return className in setOf(
+            "List", "MutableList", "ArrayList",
+            "Set", "MutableSet", "HashSet", "LinkedHashSet",
+            "Map", "MutableMap", "HashMap", "LinkedHashMap"
+        )
     }
 
     private fun isByteArray(type: IrType): Boolean {

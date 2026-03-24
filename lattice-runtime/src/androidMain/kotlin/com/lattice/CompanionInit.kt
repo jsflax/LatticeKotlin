@@ -20,3 +20,14 @@ internal actual fun createFactoryViaReflection(kClass: KClass<*>): (() -> Lattic
         null
     }
 }
+
+/**
+ * Android/JVM implementation: delete database files using java.io.File.
+ */
+internal actual fun deleteDatabaseFiles(path: String) {
+    for (suffix in listOf("", "-wal", "-shm")) {
+        try {
+            java.io.File(path + suffix).delete()
+        } catch (_: Exception) {}
+    }
+}

@@ -146,11 +146,7 @@ class Lattice private constructor(
          * Mirrors Swift's `Lattice.delete(for:)`.
          */
         fun deleteDatabase(path: String) {
-            for (suffix in listOf("", "-wal", "-shm")) {
-                try {
-                    platform.posix.unlink(path + suffix)
-                } catch (_: Exception) {}
-            }
+            deleteDatabaseFiles(path)
         }
     }
 
@@ -182,6 +178,8 @@ class Lattice private constructor(
                 if (reflectionFactory != null) {
                     factory = reflectionFactory
                     modelFactories[kClass] = reflectionFactory
+                    // Also register with VirtualModelRegistry for VirtualList type resolution
+                    VirtualModelRegistry.registerTableFactory(tableName, reflectionFactory)
                 }
             }
 
@@ -623,6 +621,13 @@ class LatticeException(message: String) : Exception(message)
  * On Native: returns null (must use explicit factory registration).
  */
 internal expect fun createFactoryViaReflection(kClass: KClass<*>): (() -> LatticeObject)?
+
+/**
+ * Platform-specific function to delete database files (db, WAL, SHM).
+ * On JVM/Android: uses java.io.File.delete()
+ * On Native: uses platform.posix.unlink()
+ */
+internal expect fun deleteDatabaseFiles(path: String)
 
 /**
  * Convenience: query objects with reified type.

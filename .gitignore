@@ -16,3 +16,6 @@ local.properties
 
 # Native libraries (built locally via build.py)
 lattice-runtime/libs/
+
+# CMake build artifacts
+lattice-runtime/.cxx/

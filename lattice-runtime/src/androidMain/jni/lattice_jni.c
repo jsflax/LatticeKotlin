@@ -231,6 +231,13 @@ JNIEXPORT jlong JNICALL JNI_FN(nativeCreateDbWithSchemaArrays)(JNIEnv* env, jobj
     return (jlong)(intptr_t)db;
 }
 
+JNIEXPORT void JNICALL JNI_FN(nativeCloseDb)(JNIEnv* env, jobject thiz, jlong dbHandle) {
+    lattice_db_t* db = (lattice_db_t*)(intptr_t)dbHandle;
+    if (db != NULL) {
+        lattice_db_close(db);
+    }
+}
+
 JNIEXPORT void JNICALL JNI_FN(nativeReleaseDb)(JNIEnv* env, jobject thiz, jlong dbHandle) {
     lattice_db_t* db = (lattice_db_t*)(intptr_t)dbHandle;
     if (db != NULL) {
@@ -505,6 +512,13 @@ JNIEXPORT jstring JNICALL JNI_FN(nativeGetObjectGlobalId)(JNIEnv* env, jobject t
     return cstring_to_jstring(env, lattice_object_get_global_id(obj));
 }
 
+JNIEXPORT jstring JNICALL JNI_FN(nativeGetObjectTableName)(JNIEnv* env, jobject thiz,
+                                                            jlong objectHandle) {
+    lattice_object_t* obj = (lattice_object_t*)(intptr_t)objectHandle;
+    if (obj == NULL) return NULL;
+    return cstring_to_jstring(env, lattice_object_get_table_name(obj));
+}
+
 JNIEXPORT jboolean JNICALL JNI_FN(nativeHasValue)(JNIEnv* env, jobject thiz,
                                                    jlong objectHandle, jstring propertyName) {
     lattice_object_t* obj = (lattice_object_t*)(intptr_t)objectHandle;
@@ -705,6 +719,118 @@ JNIEXPORT void JNICALL JNI_FN(nativeMarkSynced)(JNIEnv* env, jobject thiz,
     char* c_json = jstring_to_cstring(env, globalIdsJson);
     lattice_db_mark_synced(db, c_json);
     free(c_json);
+}
+
+JNIEXPORT jlong JNICALL JNI_FN(nativeCompactAuditLog)(JNIEnv* env, jobject thiz, jlong dbHandle) {
+    lattice_db_t* db = (lattice_db_t*)(intptr_t)dbHandle;
+    if (db == NULL) return 0;
+    return (jlong)lattice_db_compact_audit_log(db);
+}
+
+JNIEXPORT jboolean JNICALL JNI_FN(nativeIsSyncConnected)(JNIEnv* env, jobject thiz, jlong dbHandle) {
+    lattice_db_t* db = (lattice_db_t*)(intptr_t)dbHandle;
+    if (db == NULL) return JNI_FALSE;
+    return lattice_db_is_sync_connected(db) ? JNI_TRUE : JNI_FALSE;
+}
+
+// =============================================================================
+// Query Extensions
+// =============================================================================
+
+JNIEXPORT jlong JNICALL JNI_FN(nativeQueryDistinct)(JNIEnv* env, jobject thiz,
+                                                     jlong dbHandle, jstring tableName,
+                                                     jstring distinctBy, jstring whereClause,
+                                                     jstring orderBy, jlong limit, jlong offset) {
+    lattice_db_t* db = (lattice_db_t*)(intptr_t)dbHandle;
+    if (db == NULL) return 0;
+
+    char* c_table = jstring_to_cstring(env, tableName);
+    char* c_distinct = jstring_to_cstring(env, distinctBy);
+    char* c_where = jstring_to_cstring(env, whereClause);
+    char* c_order = jstring_to_cstring(env, orderBy);
+
+    lattice_results_t* results = lattice_db_query_distinct(
+        db, c_table, c_distinct, c_where, c_order, (int64_t)limit, (int64_t)offset
+    );
+
+    free(c_table);
+    free(c_distinct);
+    free(c_where);
+    free(c_order);
+    return (jlong)(intptr_t)results;
+}
+
+JNIEXPORT jint JNICALL JNI_FN(nativeCountDistinct)(JNIEnv* env, jobject thiz,
+                                                    jlong dbHandle, jstring tableName,
+                                                    jstring whereClause, jstring groupBy,
+                                                    jstring distinctBy) {
+    lattice_db_t* db = (lattice_db_t*)(intptr_t)dbHandle;
+    if (db == NULL) return 0;
+
+    char* c_table = jstring_to_cstring(env, tableName);
+    char* c_where = jstring_to_cstring(env, whereClause);
+    char* c_group = jstring_to_cstring(env, groupBy);
+    char* c_distinct = jstring_to_cstring(env, distinctBy);
+
+    int64_t count = lattice_db_count_distinct(db, c_table, c_where, c_group, c_distinct);
+
+    free(c_table);
+    free(c_where);
+    free(c_group);
+    free(c_distinct);
+    return (jint)count;
+}
+
+JNIEXPORT jlong JNICALL JNI_FN(nativeQueryFts)(JNIEnv* env, jobject thiz,
+                                                jlong dbHandle, jstring tableName,
+                                                jstring columnName, jstring matchExpression,
+                                                jstring orderBy, jlong limit) {
+    lattice_db_t* db = (lattice_db_t*)(intptr_t)dbHandle;
+    if (db == NULL) return 0;
+
+    char* c_table = jstring_to_cstring(env, tableName);
+    char* c_column = jstring_to_cstring(env, columnName);
+    char* c_match = jstring_to_cstring(env, matchExpression);
+    char* c_order = jstring_to_cstring(env, orderBy);
+
+    lattice_results_t* results = lattice_db_query_fts(
+        db, c_table, c_column, c_match, c_order, (int64_t)limit
+    );
+
+    free(c_table);
+    free(c_column);
+    free(c_match);
+    free(c_order);
+    return (jlong)(intptr_t)results;
+}
+
+// =============================================================================
+// Database Attachment
+// =============================================================================
+
+JNIEXPORT jboolean JNICALL JNI_FN(nativeAttachDb)(JNIEnv* env, jobject thiz,
+                                                   jlong dbHandle, jlong otherHandle) {
+    lattice_db_t* db = (lattice_db_t*)(intptr_t)dbHandle;
+    lattice_db_t* other = (lattice_db_t*)(intptr_t)otherHandle;
+    if (db == NULL || other == NULL) return JNI_FALSE;
+    return lattice_db_attach(db, other) == LATTICE_OK ? JNI_TRUE : JNI_FALSE;
+}
+
+// =============================================================================
+// Add with preserved global ID
+// =============================================================================
+
+JNIEXPORT jlong JNICALL JNI_FN(nativeAddObjectWithGlobalId)(JNIEnv* env, jobject thiz,
+                                                             jlong dbHandle, jlong objectHandle,
+                                                             jstring globalId) {
+    lattice_db_t* db = (lattice_db_t*)(intptr_t)dbHandle;
+    lattice_object_t* obj = (lattice_object_t*)(intptr_t)objectHandle;
+    if (db == NULL || obj == NULL) return 0;
+
+    char* c_global_id = jstring_to_cstring(env, globalId);
+    lattice_object_t* result = lattice_db_add_with_global_id(db, obj, c_global_id);
+    free(c_global_id);
+    return (jlong)(intptr_t)result;
 }
 
 // =============================================================================

@@ -298,6 +298,11 @@ internal actual object NativeBridge {
         return lattice_object_get_global_id(obj)?.toKString()
     }
 
+    actual fun getObjectTableName(objectHandle: Long): String? {
+        val obj = objectHandle.toObjectPtr() ?: return null
+        return lattice_object_get_table_name(obj)?.toKString()
+    }
+
     actual fun hasValue(objectHandle: Long, propertyName: String): Boolean {
         val obj = objectHandle.toObjectPtr() ?: return false
         return lattice_object_has_value(obj, propertyName)

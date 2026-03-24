@@ -13,7 +13,7 @@ from pathlib import Path
 
 # Paths
 SCRIPT_DIR = Path(__file__).parent.resolve()
-LATTICE_CPP_DIR = SCRIPT_DIR.parent / "LatticeCpp"
+LATTICE_CPP_DIR = SCRIPT_DIR / "LatticeCore"
 LIBS_DIR = SCRIPT_DIR / "lattice-runtime" / "libs"
 CMAKE_BUILD_DIR = LATTICE_CPP_DIR / "cmake-build"
 
@@ -162,11 +162,12 @@ def configure_android_cmake(ndk_path: Path, abi: str) -> Path:
 
 
 def build_android_cmake(build_dir: Path) -> None:
-    """Build the Android library."""
+    """Build the Android library (LatticeCAPI target only, skip tests)."""
     build_args = [
         "cmake",
         "--build", str(build_dir),
         "--config", "Release",
+        "--target", "LatticeCAPI",
         "--parallel",
     ]
     run_command(build_args)

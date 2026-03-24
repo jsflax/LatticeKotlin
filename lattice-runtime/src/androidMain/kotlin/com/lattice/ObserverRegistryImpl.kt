@@ -39,6 +39,25 @@ internal actual object ObserverRegistry {
         return ObservationToken(dbHandle, tableName, contextHandle)
     }
 
+    actual fun observeTableRaw(
+        dbHandle: Long,
+        tableName: String,
+        callback: (operation: String, rowId: Long, globalId: String) -> Unit
+    ): Long {
+        if (dbHandle == 0L) return 0L
+
+        // Create the native callback that forwards raw operation strings
+        val nativeCallback: (String, Long, String?) -> Unit = { operation, rowId, globalId ->
+            callback(operation, rowId, globalId ?: "")
+        }
+
+        // Register with native layer
+        val contextHandle = NativeBridge.observeTable(dbHandle, tableName, nativeCallback)
+        // Note: contextHandle (observer token) is intentionally not wrapped in a Cancellable here.
+        // Callers track the token themselves (e.g. Lattice.auditLogObserverToken).
+        return contextHandle
+    }
+
     /**
      * Internal observation token that wraps the JNI observer.
      */

@@ -142,6 +142,9 @@ internal expect object NativeBridge {
     /** Get the global ID of a managed object. */
     fun getObjectGlobalId(objectHandle: Long): String?
 
+    /** Get the table name of an object. Used for VirtualList type resolution. */
+    fun getObjectTableName(objectHandle: Long): String?
+
     /** Check if property has a value (not NULL). */
     fun hasValue(objectHandle: Long, propertyName: String): Boolean
 

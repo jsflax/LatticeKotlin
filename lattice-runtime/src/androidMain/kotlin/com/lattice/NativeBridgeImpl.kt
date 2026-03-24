@@ -48,6 +48,8 @@ internal actual object NativeBridge {
         syncEndpoint, authToken
     )
 
+    actual fun closeDb(dbHandle: Long) = nativeCloseDb(dbHandle)
+
     actual fun releaseDb(dbHandle: Long) = nativeReleaseDb(dbHandle)
 
     actual fun getLastError(): String? = nativeGetLastError()
@@ -124,6 +126,8 @@ internal actual object NativeBridge {
 
     actual fun getObjectGlobalId(objectHandle: Long): String? = nativeGetObjectGlobalId(objectHandle)
 
+    actual fun getObjectTableName(objectHandle: Long): String? = nativeGetObjectTableName(objectHandle)
+
     actual fun hasValue(objectHandle: Long, propertyName: String): Boolean =
         nativeHasValue(objectHandle, propertyName)
 
@@ -170,6 +174,12 @@ internal actual object NativeBridge {
     actual fun markSynced(dbHandle: Long, globalIdsJson: String) =
         nativeMarkSynced(dbHandle, globalIdsJson)
 
+    actual fun compactAuditLog(dbHandle: Long): Long =
+        nativeCompactAuditLog(dbHandle)
+
+    actual fun isSyncConnected(dbHandle: Long): Boolean =
+        nativeIsSyncConnected(dbHandle)
+
     // ========== Results Operations ==========
 
     actual fun resultsCount(resultsHandle: Long): Int = nativeResultsCount(resultsHandle)
@@ -198,6 +208,45 @@ internal actual object NativeBridge {
 
     actual fun freeString(ptr: Long) = nativeFreeString(ptr)
 
+    // ========== Query Extensions ==========
+
+    actual fun queryDistinct(
+        dbHandle: Long,
+        tableName: String,
+        distinctBy: String?,
+        whereClause: String?,
+        orderBy: String?,
+        limit: Long,
+        offset: Long
+    ): Long = nativeQueryDistinct(dbHandle, tableName, distinctBy, whereClause, orderBy, limit, offset)
+
+    actual fun countDistinct(
+        dbHandle: Long,
+        tableName: String,
+        whereClause: String?,
+        groupBy: String?,
+        distinctBy: String?
+    ): Int = nativeCountDistinct(dbHandle, tableName, whereClause, groupBy, distinctBy)
+
+    actual fun queryFts(
+        dbHandle: Long,
+        tableName: String,
+        columnName: String,
+        matchExpression: String,
+        orderBy: String?,
+        limit: Long
+    ): Long = nativeQueryFts(dbHandle, tableName, columnName, matchExpression, orderBy, limit)
+
+    // ========== Database Attachment ==========
+
+    actual fun attachDb(dbHandle: Long, otherHandle: Long): Boolean =
+        nativeAttachDb(dbHandle, otherHandle)
+
+    // ========== Add with preserved global ID ==========
+
+    actual fun addObjectWithGlobalId(dbHandle: Long, objectHandle: Long, globalId: String): Long =
+        nativeAddObjectWithGlobalId(dbHandle, objectHandle, globalId)
+
     // ========== JNI External Declarations ==========
 
     // Database Lifecycle
@@ -223,6 +272,7 @@ internal actual object NativeBridge {
         syncEndpoint: String?,
         authToken: String?
     ): Long
+    private external fun nativeCloseDb(dbHandle: Long)
     private external fun nativeReleaseDb(dbHandle: Long)
     private external fun nativeGetLastError(): String?
 
@@ -261,6 +311,7 @@ internal actual object NativeBridge {
     private external fun nativeSetBoolProperty(objectHandle: Long, propertyName: String, value: Boolean)
     private external fun nativeGetObjectId(objectHandle: Long): Long
     private external fun nativeGetObjectGlobalId(objectHandle: Long): String?
+    private external fun nativeGetObjectTableName(objectHandle: Long): String?
     private external fun nativeHasValue(objectHandle: Long, propertyName: String): Boolean
     private external fun nativeSetNull(objectHandle: Long, propertyName: String)
 
@@ -282,6 +333,8 @@ internal actual object NativeBridge {
     private external fun nativeGetEventsAfter(dbHandle: Long, globalId: String?): String?
     private external fun nativeGetPendingEvents(dbHandle: Long): String?
     private external fun nativeMarkSynced(dbHandle: Long, globalIdsJson: String)
+    private external fun nativeCompactAuditLog(dbHandle: Long): Long
+    private external fun nativeIsSyncConnected(dbHandle: Long): Boolean
 
     // Results Operations
     private external fun nativeResultsCount(resultsHandle: Long): Int
@@ -298,6 +351,38 @@ internal actual object NativeBridge {
 
     // String Memory
     private external fun nativeFreeString(ptr: Long)
+
+    // Query Extensions
+    private external fun nativeQueryDistinct(
+        dbHandle: Long,
+        tableName: String,
+        distinctBy: String?,
+        whereClause: String?,
+        orderBy: String?,
+        limit: Long,
+        offset: Long
+    ): Long
+    private external fun nativeCountDistinct(
+        dbHandle: Long,
+        tableName: String,
+        whereClause: String?,
+        groupBy: String?,
+        distinctBy: String?
+    ): Int
+    private external fun nativeQueryFts(
+        dbHandle: Long,
+        tableName: String,
+        columnName: String,
+        matchExpression: String,
+        orderBy: String?,
+        limit: Long
+    ): Long
+
+    // Database Attachment
+    private external fun nativeAttachDb(dbHandle: Long, otherHandle: Long): Boolean
+
+    // Add with preserved global ID
+    private external fun nativeAddObjectWithGlobalId(dbHandle: Long, objectHandle: Long, globalId: String): Long
 
     // ========== Observer Operations ==========
 

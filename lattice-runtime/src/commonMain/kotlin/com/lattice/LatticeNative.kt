@@ -383,6 +383,125 @@ object LatticeNative {
     }
 
     /**
+     * Get a native collection property (List, Set, Map) stored as JSON TEXT.
+     * Uses the provided KSerializer to deserialize from JSON.
+     *
+     * Mirrors Swift Lattice's PrimitiveProperty conformance for Array/Set/Dictionary.
+     *
+     * @param handle Native object handle
+     * @param property Property name
+     * @param serializer KSerializer for the collection type (e.g., ListSerializer(String.serializer()))
+     * @param default Default value if no data stored
+     */
+    /**
+     * Get a native collection property stored as JSON TEXT.
+     * Deserializes using kotlinx.serialization with the provided KSerializer.
+     */
+    fun <T> getCollectionProperty(
+        handle: Long,
+        property: String,
+        serializer: kotlinx.serialization.KSerializer<T>,
+        default: T
+    ): T {
+        if (handle == 0L) return default
+        val json = NativeBridge.getStringProperty(handle, property) ?: return default
+        if (json.isEmpty()) return default
+        return try {
+            collectionJson.decodeFromString(serializer, json)
+        } catch (_: Exception) {
+            default
+        }
+    }
+
+    /**
+     * Set a native collection property as JSON TEXT.
+     * Serializes using kotlinx.serialization with the provided KSerializer.
+     */
+    fun <T> setCollectionProperty(
+        handle: Long,
+        property: String,
+        value: T,
+        serializer: kotlinx.serialization.KSerializer<T>
+    ) {
+        if (handle == 0L) return
+        val json = try {
+            collectionJson.encodeToString(serializer, value)
+        } catch (_: Exception) {
+            "[]"
+        }
+        NativeBridge.setStringProperty(handle, property, json)
+    }
+
+    /** Shared Json instance for collection serialization. */
+    private val collectionJson = kotlinx.serialization.json.Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+    }
+
+    // ========== Convenience collection accessors (called from compiler-generated code) ==========
+    // These avoid the need to construct KSerializer instances in IR.
+
+    // String serializer obtained via the builtins serializer() extension (requires import)
+    private val stringListSerializer: kotlinx.serialization.KSerializer<List<String>> by lazy {
+        kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>())
+    }
+    private val stringSetSerializer: kotlinx.serialization.KSerializer<Set<String>> by lazy {
+        kotlinx.serialization.builtins.SetSerializer(kotlinx.serialization.serializer<String>())
+    }
+
+    fun getStringList(handle: Long, property: String): MutableList<String> {
+        if (handle == 0L) return mutableListOf()
+        val json = NativeBridge.getStringProperty(handle, property) ?: return mutableListOf()
+        if (json.isEmpty()) return mutableListOf()
+        return try {
+            collectionJson.decodeFromString(stringListSerializer, json).toMutableList()
+        } catch (_: Exception) { mutableListOf() }
+    }
+
+    fun setStringList(handle: Long, property: String, value: List<String>) {
+        if (handle == 0L) return
+        val json = try { collectionJson.encodeToString(stringListSerializer, value) } catch (_: Exception) { "[]" }
+        NativeBridge.setStringProperty(handle, property, json)
+    }
+
+    fun getStringSet(handle: Long, property: String): MutableSet<String> {
+        if (handle == 0L) return mutableSetOf()
+        val json = NativeBridge.getStringProperty(handle, property) ?: return mutableSetOf()
+        if (json.isEmpty()) return mutableSetOf()
+        return try {
+            collectionJson.decodeFromString(stringSetSerializer, json).toMutableSet()
+        } catch (_: Exception) { mutableSetOf() }
+    }
+
+    fun setStringSet(handle: Long, property: String, value: Set<String>) {
+        if (handle == 0L) return
+        val json = try { collectionJson.encodeToString(stringSetSerializer, value) } catch (_: Exception) { "[]" }
+        NativeBridge.setStringProperty(handle, property, json)
+    }
+
+    fun getStringStringMap(handle: Long, property: String): MutableMap<String, String> {
+        if (handle == 0L) return mutableMapOf()
+        val json = NativeBridge.getStringProperty(handle, property) ?: return mutableMapOf()
+        if (json.isEmpty()) return mutableMapOf()
+        return try {
+            @Suppress("UNCHECKED_CAST")
+            (collectionJson.parseToJsonElement(json) as? kotlinx.serialization.json.JsonObject)
+                ?.mapValues { it.value.toString().removeSurrounding("\"") }
+                ?.toMutableMap() ?: mutableMapOf()
+        } catch (_: Exception) { mutableMapOf() }
+    }
+
+    fun setStringStringMap(handle: Long, property: String, value: Map<String, String>) {
+        if (handle == 0L) return
+        val json = try {
+            kotlinx.serialization.json.buildJsonObject {
+                value.forEach { (k, v) -> put(k, kotlinx.serialization.json.JsonPrimitive(v)) }
+            }.toString()
+        } catch (_: Exception) { "{}" }
+        NativeBridge.setStringProperty(handle, property, json)
+    }
+
+    /**
      * Get an embedded model, decoding from JSON.
      * Uses the registered serializer for the type.
      *
@@ -444,8 +563,8 @@ object LatticeNative {
      * Create a new unmanaged C++ object with schema (like Swift's _defaultCxxLatticeObject).
      * This is the preferred way to create objects - schema is embedded so INSERT works correctly.
      */
-    fun createObjectWithSchema(tableName: String, schema: List<LatticePropertyDescriptor>): Long {
-        if (schema.isEmpty()) {
+    fun createObjectWithSchema(tableName: String, schema: List<LatticePropertyDescriptor>?): Long {
+        if (schema == null || schema.isEmpty()) {
             return createObject(tableName)
         }
 
