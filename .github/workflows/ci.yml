@@ -25,6 +25,12 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Build LatticeCore native library
+        # clang explicitly: gcc rejects the bridge's in-class explicit member
+        # specializations (managed_object.hpp); same pin latticecore's capi.yml
+        # and latticepython's ci.yml use.
+        env:
+          CC: clang
+          CXX: clang++
         run: python3 build.py
 
       - name: Build and test
