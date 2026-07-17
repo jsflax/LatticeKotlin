@@ -70,6 +70,6 @@ tasks.withType<KotlinCompilationTask<*>>().configureEach {
 // Ensure the compiler plugin is built before compiling
 gradle.projectsEvaluated {
     tasks.matching { it.name.startsWith("compile") && it.name.contains("Kotlin") }.configureEach {
-        dependsOn(gradle.includedBuild("LatticeKotlin").task(":lattice-compiler-plugin:jar"))
+        dependsOn(gradle.includedBuild("latticekotlin").task(":lattice-compiler-plugin:jar"))
     }
 }
