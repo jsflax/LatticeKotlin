@@ -444,6 +444,12 @@ internal actual object NativeBridge {
         }
     }
 
+    actual fun createDbObject(dbHandle: Long, tableName: String): Long {
+        val db = dbHandle.toDbPtr() ?: return 0L
+        val obj = lattice_db_create_object(db, tableName) ?: return 0L
+        return obj.rawValue.toLong()
+    }
+
     // ========== Sync Operations ==========
 
     actual fun receiveSyncData(dbHandle: Long, data: ByteArray): String? {

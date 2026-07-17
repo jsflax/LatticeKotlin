@@ -245,7 +245,6 @@ object LatticeNative {
         if (value == null) {
             NativeBridge.setNull(handle, property)
         } else {
-            // Convert to Unix timestamp (seconds since epoch as double)
             val seconds = value.epochSeconds.toDouble() + (value.nanosecondsOfSecond / 1_000_000_000.0)
             setDouble(handle, property, seconds)
         }
@@ -542,6 +541,27 @@ object LatticeNative {
         } else {
             val json = EmbeddedSerializers.encode(kClass, value)
             setEmbeddedJson(handle, property, json)
+        }
+    }
+
+    // ========== Schema Builder (called by compiler-generated code) ==========
+
+    /**
+     * Build a schema list from a compact descriptor string.
+     * Format: "name:type:kind:nullable,name:type:kind:nullable,..."
+     * where type/kind are ordinals and nullable is 0/1.
+     * This avoids complex IR codegen that breaks on JVM/Android.
+     */
+    fun buildSchemaFromString(descriptor: String): List<LatticePropertyDescriptor> {
+        if (descriptor.isEmpty()) return emptyList()
+        return descriptor.split(",").map { entry ->
+            val parts = entry.split(":")
+            LatticePropertyDescriptor(
+                name = parts[0],
+                type = LatticeType.entries[parts[1].toInt()],
+                kind = LatticePropertyKind.entries[parts[2].toInt()],
+                nullable = parts[3] == "1"
+            )
         }
     }
 

@@ -181,7 +181,11 @@ class LatticeIrTransformer(
         }.toList()
 
         // Find and implement FIR-generated _latticeSchema property
-        val schemaProperty = declaration.properties.find { it.name.asString() == "_latticeSchema" }
+        val allSchemaProps = declaration.properties.filter { it.name.asString() == "_latticeSchema" }.toList()
+        messageCollector.report(CompilerMessageSeverity.WARNING,
+            "Lattice: _latticeSchema candidates: ${allSchemaProps.map { "origin=${it.origin} fake=${it.isFakeOverride} getter_origin=${it.getter?.origin} getter_fake=${it.getter?.isFakeOverride}" }}")
+        // Prefer non-fake-override (FIR-generated) over fake override (from interface)
+        val schemaProperty = allSchemaProps.find { !it.isFakeOverride } ?: allSchemaProps.firstOrNull()
         if (schemaProperty != null) {
             implementSchemaProperty(declaration, schemaProperty, userProperties)
         } else {
@@ -977,8 +981,15 @@ class LatticeIrTransformer(
             kindClass.owner.declarations.filterIsInstance<IrEnumEntry>()
                 .find { it.name.asString() == name }
 
+        messageCollector.report(CompilerMessageSeverity.WARNING,
+            "Lattice: implementSchemaProperty getter=${property.getter != null} isFakeOverride=${property.isFakeOverride} getterFakeOverride=${property.getter?.isFakeOverride} userProps=${userProperties.size}")
+
         property.getter?.let { getter ->
+            // Set origin so JVM backend generates a real method body
+            getter.origin = LatticeDeclarationOrigin
+            property.origin = LatticeDeclarationOrigin
             getter.body = DeclarationIrBuilder(pluginContext, getter.symbol).irBlockBody {
+
                 // Build list of LatticePropertyDescriptor
                 val descriptors = userProperties.mapNotNull { prop ->
                     val backingField = prop.backingField ?: return@mapNotNull null
@@ -1060,23 +1071,60 @@ class LatticeIrTransformer(
                     }
                 }
 
-                // Build a listOf(...) call
-                val listOf = pluginContext.referenceFunctions(
-                    CallableId(FqName("kotlin.collections"), Name.identifier("listOf"))
-                ).find {
-                    it.owner.valueParameters.size == 1 &&
-                        it.owner.valueParameters[0].isVararg
-                }
+                messageCollector.report(CompilerMessageSeverity.WARNING,
+                    "Lattice: _latticeSchema descriptors.size=${descriptors.size}")
 
-                if (listOf != null && descriptors.isNotEmpty()) {
-                    +irReturn(
-                        irCall(listOf).apply {
-                            putValueArgument(0, irVararg(
-                                descriptorClass.defaultType,
-                                descriptors
-                            ))
-                        }
-                    )
+                if (descriptors.isNotEmpty()) {
+                    // Build schema as a single compile-time string constant and
+                    // call LatticeNative.buildSchemaFromString() at runtime.
+                    // This avoids all complex IR codegen (constructors, varargs, collections)
+                    // that breaks on JVM/Android.
+                    val buildFn = findLatticeNativeFunction(latticeNativeClass!!, "buildSchemaFromString")
+
+                    if (buildFn != null) {
+                        // Build descriptor string at COMPILE TIME: "name:type:kind:nullable,..."
+                        val schemaStr = userProperties.mapNotNull { prop ->
+                            val bf = prop.backingField ?: return@mapNotNull null
+                            val pt = bf.type
+                            val isNullable = pt.isNullable()
+                            val baseForType = if (isNullable) pt.makeNotNull() else pt
+                            val isLink = prop.hasAnnotation(linkAnnotationFqn)
+                            val isLinkList = prop.hasAnnotation(linkListAnnotationFqn) ||
+                                pt.classOrNull?.owner?.name?.asString() == "LatticeList"
+                            val isVirtualList = pt.classOrNull?.owner?.name?.asString() == "VirtualList"
+                            val typeOrd = when {
+                                isLink || isLinkList || isVirtualList -> 0
+                                pt.isString() || (isNullable && baseForType.isString()) -> 2
+                                pt.isInt() || (isNullable && baseForType.isInt()) -> 0
+                                pt.isLong() || (isNullable && baseForType.isLong()) -> 0
+                                pt.isBoolean() || (isNullable && baseForType.isBoolean()) -> 0
+                                pt.isFloat() || (isNullable && baseForType.isFloat()) -> 1
+                                pt.isDouble() || (isNullable && baseForType.isDouble()) -> 1
+                                isByteArray(baseForType) || isFloatVector(baseForType) || isDoubleVector(baseForType) -> 3
+                                isInstant(baseForType) -> 1
+                                isUuid(baseForType) -> 2
+                                isLatticeEnum(baseForType) -> if (getEnumStoreAsOrdinal(baseForType)) 0 else 2
+                                else -> 2
+                            }
+                            val kindOrd = when {
+                                isLink -> 1; isLinkList -> 2; isVirtualList -> 3; else -> 0
+                            }
+                            "${prop.name.asString()}:$typeOrd:$kindOrd:${if (isNullable) "1" else "0"}"
+                        }.joinToString(",")
+
+                        messageCollector.report(CompilerMessageSeverity.WARNING,
+                            "Lattice: schema string = '$schemaStr'")
+
+                        // Generate: return LatticeNative.buildSchemaFromString("text:2:0:0,createdAt:1:0:0")
+                        +irReturn(irCall(buildFn).apply {
+                            dispatchReceiver = irGetObject(latticeNativeClass!!)
+                            putValueArgument(0, irString(schemaStr))
+                        })
+                    } else {
+                        messageCollector.report(CompilerMessageSeverity.WARNING,
+                            "Lattice: buildSchemaFromString not found on LatticeNative")
+                        +irReturn(irNull())
+                    }
                 } else {
                     // Return empty list
                     val emptyList = pluginContext.referenceFunctions(

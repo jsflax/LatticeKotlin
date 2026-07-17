@@ -178,6 +178,9 @@ internal expect object NativeBridge {
     /** Create object with schema (JSON-encoded). Returns object handle. */
     fun createObjectWithSchema(tableName: String, schemaJson: String): Long
 
+    /** Create object using DB's registered schema. Returns object handle. */
+    fun createDbObject(dbHandle: Long, tableName: String): Long
+
     // ========== Sync Operations ==========
 
     /** Receive sync data from server. Returns JSON array of applied globalIds. */

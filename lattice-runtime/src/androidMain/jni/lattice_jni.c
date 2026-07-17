@@ -264,6 +264,17 @@ JNIEXPORT jlong JNICALL JNI_FN(nativeAddObject)(JNIEnv* env, jobject thiz,
     return (jlong)(intptr_t)managed;
 }
 
+// Create an object using the DB's registered schema for a table
+JNIEXPORT jlong JNICALL JNI_FN(nativeCreateDbObject)(JNIEnv* env, jobject thiz,
+                                                      jlong dbHandle, jstring tableName) {
+    lattice_db_t* db = (lattice_db_t*)(intptr_t)dbHandle;
+    if (db == NULL) return 0;
+    char* c_table = jstring_to_cstring(env, tableName);
+    lattice_object_t* obj = lattice_db_create_object(db, c_table);
+    free(c_table);
+    return (jlong)(intptr_t)obj;
+}
+
 JNIEXPORT jlong JNICALL JNI_FN(nativeFindObject)(JNIEnv* env, jobject thiz,
                                                   jlong dbHandle, jstring tableName, jlong id) {
     lattice_db_t* db = (lattice_db_t*)(intptr_t)dbHandle;
@@ -654,12 +665,147 @@ JNIEXPORT jlong JNICALL JNI_FN(nativeGetLinkListHandle)(JNIEnv* env, jobject thi
 // Object Creation
 // =============================================================================
 
+// Minimal JSON helpers for schema parsing
+static int skip_whitespace(const char* s, int i) {
+    while (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r') i++;
+    return i;
+}
+
+// Extract a JSON string value after a colon. Returns malloc'd string or NULL.
+static char* json_extract_string(const char* json, const char* key) {
+    char search[128];
+    snprintf(search, sizeof(search), "\"%s\"", key);
+    const char* pos = strstr(json, search);
+    if (!pos) return NULL;
+    pos += strlen(search);
+    while (*pos == ' ' || *pos == ':' || *pos == ' ') pos++;
+    if (*pos == ':') pos++;
+    while (*pos == ' ') pos++;
+    if (*pos == 'n' && strncmp(pos, "null", 4) == 0) return NULL;
+    if (*pos != '"') return NULL;
+    pos++; // skip opening quote
+    const char* end = strchr(pos, '"');
+    if (!end) return NULL;
+    size_t len = end - pos;
+    char* result = (char*)malloc(len + 1);
+    memcpy(result, pos, len);
+    result[len] = '\0';
+    return result;
+}
+
+// Extract a JSON integer value after key. Returns -1 on failure.
+static int json_extract_int(const char* json, const char* key) {
+    char search[128];
+    snprintf(search, sizeof(search), "\"%s\"", key);
+    const char* pos = strstr(json, search);
+    if (!pos) return -1;
+    pos += strlen(search);
+    while (*pos == ' ' || *pos == ':') pos++;
+    if (*pos == ':') pos++;
+    while (*pos == ' ') pos++;
+    return atoi(pos);
+}
+
+// Extract a JSON boolean value after key. Returns 0 on failure.
+static int json_extract_bool(const char* json, const char* key) {
+    char search[128];
+    snprintf(search, sizeof(search), "\"%s\"", key);
+    const char* pos = strstr(json, search);
+    if (!pos) return 0;
+    pos += strlen(search);
+    while (*pos == ' ' || *pos == ':') pos++;
+    if (*pos == ':') pos++;
+    while (*pos == ' ') pos++;
+    return (*pos == 't') ? 1 : 0;
+}
+
+// Split JSON array of objects into individual object strings
+// Returns count, fills out_objects (caller must free each)
+static int json_split_objects(const char* json, char*** out_objects) {
+    int capacity = 16;
+    char** objects = (char**)malloc(capacity * sizeof(char*));
+    int count = 0;
+    int depth = 0;
+    const char* start = NULL;
+
+    for (const char* p = json; *p; p++) {
+        if (*p == '{') {
+            if (depth == 0) start = p;
+            depth++;
+        } else if (*p == '}') {
+            depth--;
+            if (depth == 0 && start) {
+                size_t len = p - start + 1;
+                if (count >= capacity) {
+                    capacity *= 2;
+                    objects = (char**)realloc(objects, capacity * sizeof(char*));
+                }
+                objects[count] = (char*)malloc(len + 1);
+                memcpy(objects[count], start, len);
+                objects[count][len] = '\0';
+                count++;
+                start = NULL;
+            }
+        }
+    }
+    *out_objects = objects;
+    return count;
+}
+
 JNIEXPORT jlong JNICALL JNI_FN(nativeCreateObjectWithSchema)(JNIEnv* env, jobject thiz,
                                                               jstring tableName, jstring schemaJson) {
     char* c_table = jstring_to_cstring(env, tableName);
-    // TODO: Parse schemaJson and create with proper schema
-    lattice_object_t* obj = lattice_object_create(c_table);
+    char* c_schema = jstring_to_cstring(env, schemaJson);
+
+    __android_log_print(ANDROID_LOG_INFO, "LatticeJNI", "createObjectWithSchema: table=%s schema_len=%d",
+                        c_table ? c_table : "null", c_schema ? (int)strlen(c_schema) : -1);
+
+    if (c_schema == NULL || strlen(c_schema) == 0) {
+        lattice_object_t* obj = lattice_object_create(c_table);
+        free(c_table);
+        free(c_schema);
+        return (jlong)(intptr_t)obj;
+    }
+
+    // Parse JSON schema array into lattice_property_t array
+    char** obj_strings = NULL;
+    int prop_count = json_split_objects(c_schema, &obj_strings);
+
+    __android_log_print(ANDROID_LOG_INFO, "LatticeJNI", "Parsed %d properties from schema", prop_count);
+
+    lattice_property_t* props = (lattice_property_t*)calloc(prop_count, sizeof(lattice_property_t));
+
+    for (int i = 0; i < prop_count; i++) {
+        const char* entry = obj_strings[i];
+        props[i].name = json_extract_string(entry, "name");
+        props[i].type = (lattice_column_type_t)json_extract_int(entry, "type");
+        props[i].kind = (lattice_property_kind_t)json_extract_int(entry, "kind");
+        props[i].nullable = json_extract_bool(entry, "nullable");
+        props[i].is_indexed = json_extract_bool(entry, "isIndexed");
+        props[i].is_unique = json_extract_bool(entry, "isUnique");
+        props[i].is_full_text = json_extract_bool(entry, "isFullText");
+        props[i].is_vector = json_extract_bool(entry, "isVector");
+        props[i].is_geo_bounds = json_extract_bool(entry, "isGeoBounds");
+        props[i].target_table = json_extract_string(entry, "targetTable");
+        props[i].link_table = json_extract_string(entry, "linkTable");
+        props[i].column_name = json_extract_string(entry, "columnName");
+    }
+
+    lattice_object_t* obj = lattice_object_create_with_schema(c_table, props, prop_count);
+
+    // Cleanup
+    for (int i = 0; i < prop_count; i++) {
+        free((void*)props[i].name);
+        free((void*)props[i].target_table);
+        free((void*)props[i].link_table);
+        free((void*)props[i].column_name);
+        free(obj_strings[i]);
+    }
+    free(props);
+    free(obj_strings);
     free(c_table);
+    free(c_schema);
+
     return (jlong)(intptr_t)obj;
 }
 

@@ -161,6 +161,9 @@ internal actual object NativeBridge {
     actual fun createObjectWithSchema(tableName: String, schemaJson: String): Long =
         nativeCreateObjectWithSchema(tableName, schemaJson)
 
+    actual fun createDbObject(dbHandle: Long, tableName: String): Long =
+        nativeCreateDbObject(dbHandle, tableName)
+
     // ========== Sync Operations ==========
 
     actual fun receiveSyncData(dbHandle: Long, data: ByteArray): String? =
@@ -327,6 +330,7 @@ internal actual object NativeBridge {
 
     // Object Creation
     private external fun nativeCreateObjectWithSchema(tableName: String, schemaJson: String): Long
+    private external fun nativeCreateDbObject(dbHandle: Long, tableName: String): Long
 
     // Sync Operations
     private external fun nativeReceiveSyncData(dbHandle: Long, data: ByteArray): String?
