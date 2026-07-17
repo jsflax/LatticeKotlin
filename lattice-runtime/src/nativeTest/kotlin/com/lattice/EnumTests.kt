@@ -7,6 +7,11 @@ import kotlin.test.*
  */
 class EnumTests {
 
+    @AfterTest
+    fun tearDownTestLattices() {
+        cleanupTestLattices()
+    }
+
     @BeforeTest
     fun setup() {
         registerTestModelFactories()

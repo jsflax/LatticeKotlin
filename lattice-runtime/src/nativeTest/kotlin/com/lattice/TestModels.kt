@@ -41,15 +41,31 @@ fun registerTestModelFactories() {
 /** Paths created by testLattice for cleanup in @AfterTest. */
 val testLatticePaths = mutableListOf<String>()
 
+/** Instances created by testLattice, closed in cleanupTestLattices. */
+val testLatticeInstances = mutableListOf<Lattice>()
+
 fun testLattice(vararg types: KClass<out LatticeObject>): Lattice {
     val randomSuffix = Random.nextLong().toString(16)
     val path = "/tmp/lattice_test_${randomSuffix}.sqlite"
     testLatticePaths.add(path)
-    return Lattice(path, *types)
+    val lattice = Lattice(path, *types)
+    testLatticeInstances.add(lattice)
+    return lattice
 }
 
-/** Call in @AfterTest to clean up test database files. */
+/**
+ * Call in @AfterTest to close leaked instances and delete test database
+ * files. Closing is essential: the whole native test suite runs in one
+ * process, and unclosed databases pile up file descriptors until fd
+ * numbers pass FD_SETSIZE (1024), at which point Ktor's select()-based
+ * socket loop (used by the sync tests) stops working and crashes.
+ * Lattice.close() is idempotent, so tests that already close are fine.
+ */
 fun cleanupTestLattices() {
+    for (lattice in testLatticeInstances) {
+        runCatching { lattice.close() }
+    }
+    testLatticeInstances.clear()
     for (path in testLatticePaths) {
         Lattice.deleteDatabase(path)
     }

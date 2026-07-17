@@ -7,6 +7,11 @@ import kotlin.test.*
  */
 class ResultsTests {
 
+    @AfterTest
+    fun tearDownTestLattices() {
+        cleanupTestLattices()
+    }
+
     @BeforeTest
     fun setup() {
         registerTestModelFactories()

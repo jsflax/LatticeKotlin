@@ -8,6 +8,11 @@ import kotlin.test.*
  */
 class VectorSearchTests {
 
+    @AfterTest
+    fun tearDownTestLattices() {
+        cleanupTestLattices()
+    }
+
     @BeforeTest
     fun setup() {
         registerTestModelFactories()

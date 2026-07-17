@@ -17,6 +17,11 @@ import kotlin.uuid.Uuid
 @OptIn(ExperimentalUuidApi::class)
 class LatticeTests {
 
+    @AfterTest
+    fun tearDownTestLattices() {
+        cleanupTestLattices()
+    }
+
     @BeforeTest
     fun setup() {
         // Register model factories for schema discovery

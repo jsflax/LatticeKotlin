@@ -8,6 +8,11 @@ import kotlin.test.*
  */
 class DistinctTests {
 
+    @AfterTest
+    fun tearDownTestLattices() {
+        cleanupTestLattices()
+    }
+
     @BeforeTest
     fun setup() {
         registerTestModelFactories()

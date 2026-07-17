@@ -8,6 +8,11 @@ import kotlin.test.*
  */
 class AttachTests {
 
+    @AfterTest
+    fun tearDownTestLattices() {
+        cleanupTestLattices()
+    }
+
     @BeforeTest
     fun setup() {
         registerTestModelFactories()

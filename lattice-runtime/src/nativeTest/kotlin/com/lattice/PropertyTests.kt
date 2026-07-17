@@ -12,6 +12,11 @@ import kotlin.uuid.Uuid
  */
 class PropertyTests {
 
+    @AfterTest
+    fun tearDownTestLattices() {
+        cleanupTestLattices()
+    }
+
     @BeforeTest
     fun setup() {
         registerTestModelFactories()

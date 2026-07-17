@@ -11,6 +11,11 @@ import kotlin.test.*
  */
 class CrossProcessTests {
 
+    @AfterTest
+    fun tearDownTestLattices() {
+        cleanupTestLattices()
+    }
+
     @BeforeTest
     fun setup() {
         registerTestModelFactories()

@@ -9,6 +9,11 @@ import kotlin.test.*
  */
 class CombinedQueryTests {
 
+    @AfterTest
+    fun tearDownTestLattices() {
+        cleanupTestLattices()
+    }
+
     @BeforeTest
     fun setup() {
         registerTestModelFactories()

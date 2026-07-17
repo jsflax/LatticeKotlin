@@ -35,6 +35,7 @@ class BasicSyncTests {
     fun teardown() {
         clients.reversed().forEach { it.close() }
         clients.clear()
+        cleanupTestLattices()
         server.stop()
     }
 
