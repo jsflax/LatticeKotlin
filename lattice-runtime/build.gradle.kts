@@ -199,6 +199,28 @@ tasks.matching { it.name.contains("cinterop", ignoreCase = true) }.configureEach
     dependsOn("checkNativeLib")
 }
 
+// Cross-target test binaries can only link when the native library for that
+// target is present in libs/ (build.py builds the host library only). Skip
+// the link+run of test binaries whose target library is missing so
+// `./gradlew build` works on any single-platform host.
+afterEvaluate {
+    val hostIsMac = org.gradle.internal.os.OperatingSystem.current().isMacOsX
+    val hostIsLinux = org.gradle.internal.os.OperatingSystem.current().isLinux
+    val hostIsArm = System.getProperty("os.arch") in listOf("aarch64", "arm64")
+    val targetLibAvailable = mapOf(
+        "MacosArm64" to (hostIsMac && hostIsArm && libsDir.resolve("libLatticeCAPI.dylib").exists()),
+        "MacosX64" to (hostIsMac && !hostIsArm && libsDir.resolve("libLatticeCAPI.dylib").exists()),
+        "LinuxX64" to (hostIsLinux && libsDir.resolve("libLatticeCAPI.so").exists())
+    )
+    for ((target, available) in targetLibAvailable) {
+        if (!available) {
+            tasks.matching {
+                it.name == "linkDebugTest$target" || it.name == "${target.replaceFirstChar(Char::lowercase)}Test"
+            }.configureEach { enabled = false }
+        }
+    }
+}
+
 publishing {
     publications.withType<MavenPublication> {
         artifactId = "lattice-runtime-${name}"
