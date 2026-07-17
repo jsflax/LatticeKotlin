@@ -211,7 +211,7 @@ tasks.withType<KotlinCompilationTask<*>>().matching {
 }.configureEach {
     dependsOn(":lattice-compiler-plugin:jar")
     compilerOptions {
-        val pluginJar = compilerPluginProject.layout.buildDirectory.file("libs/lattice-compiler-plugin-0.1.0-SNAPSHOT.jar")
+        val pluginJar = compilerPluginProject.layout.buildDirectory.file("libs/lattice-compiler-plugin-0.10.0-SNAPSHOT.jar")
         freeCompilerArgs.add("-Xplugin=${pluginJar.get().asFile.absolutePath}")
     }
 }
