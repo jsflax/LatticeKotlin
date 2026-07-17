@@ -116,10 +116,16 @@ def copy_library() -> None:
     # Create libs directory
     LIBS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Copy library
-    dst = LIBS_DIR / lib_name
-    print(f"\nCopying {src} -> {dst}")
-    shutil.copy2(src, dst)
+    # Copy the library under every name CMake produced (the unversioned
+    # linker name plus soname/realname variants like libLatticeCAPI.0.dylib).
+    # Since LatticeCore 1.0.0-rc.1 the install name is the versioned soname,
+    # so the runtime loader needs the versioned file present too.
+    # copy2 dereferences symlinks, so each name becomes a regular file.
+    stem = lib_name.split(".")[0]  # e.g. "libLatticeCAPI"
+    for candidate in sorted(CMAKE_BUILD_DIR.glob(f"{stem}*")):
+        dst = LIBS_DIR / candidate.name
+        print(f"\nCopying {candidate} -> {dst}")
+        shutil.copy2(candidate, dst)
 
     # Copy the C header
     header_src = LATTICE_CPP_DIR / "Sources" / "LatticeCAPI" / "include" / "lattice.h"
