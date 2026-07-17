@@ -158,6 +158,11 @@ internal actual object NativeBridge {
 
     // ========== Object Operations ==========
 
+    actual fun releaseObject(objectHandle: Long) {
+        val obj = objectHandle.toObjectPtr() ?: return
+        lattice_object_release(obj)
+    }
+
     actual fun addObject(dbHandle: Long, objectHandle: Long): Long {
         val db = dbHandle.toDbPtr() ?: return 0L
         val obj = objectHandle.toObjectPtr() ?: return 0L

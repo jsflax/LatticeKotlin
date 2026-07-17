@@ -66,6 +66,9 @@ internal expect object NativeBridge {
     /** Add object to database. Returns managed object handle or 0 on failure. */
     fun addObject(dbHandle: Long, objectHandle: Long): Long
 
+    /** Release an object handle (drops the C-side reference). */
+    fun releaseObject(objectHandle: Long)
+
     /** Find object by primary key. Returns object handle or 0 if not found. */
     fun findObject(dbHandle: Long, tableName: String, id: Long): Long
 

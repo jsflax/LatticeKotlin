@@ -252,7 +252,9 @@ class Lattice private constructor(
                 val modelRowId = NativeBridge.getIntProperty(auditHandle, "rowId")
                 val modelGlobalId = NativeBridge.getStringProperty(auditHandle, "globalRowId") ?: globalId
                 val isSynced = NativeBridge.getIntProperty(auditHandle, "isSynchronized") != 0L
-                // Note: auditHandle will be released by the C++ ref-counting
+                // Release the transient AuditLog handle: lattice_db_find returns
+                // a +1 reference whose managed object holds the owning db alive.
+                NativeBridge.releaseObject(auditHandle)
 
                 val change = Change(
                     tableName = modelTable,
@@ -352,8 +354,11 @@ class Lattice private constructor(
             throw LatticeException("Failed to add object: ${NativeBridge.getLastError()}")
         }
 
-        // Update the Kotlin object's handle to point to managed object
+        // Update the Kotlin object's handle to point to managed object.
+        // The unmanaged handle has been superseded - release its C-side ref.
         obj._latticeHandle = managedHandle
+        NativeBridge.releaseObject(existingHandle)
+        trackObjectHandle(managedHandle)
 
         return obj
     }
@@ -373,6 +378,8 @@ class Lattice private constructor(
         }
 
         obj._latticeHandle = managedHandle
+        NativeBridge.releaseObject(existingHandle)
+        trackObjectHandle(managedHandle)
         return obj
     }
 
@@ -485,10 +492,36 @@ class Lattice private constructor(
         }
     }
 
+    private var closed = false
+
+    // Managed object handles issued by this Lattice (add/find/query results).
+    // Swift releases these deterministically via ARC deinit; Kotlin has no
+    // deinit, so we release them in bulk on close(). Since LatticeCore
+    // 1.0.0-rc.1, database::close() is logical-only and the sqlite
+    // connections (file descriptors) are freed when the last reference
+    // drops - a leaked managed-object handle keeps the whole db pinned.
+    private val issuedObjectHandles = mutableListOf<Long>()
+
+    internal fun trackObjectHandle(handle: Long) {
+        if (handle != 0L) issuedObjectHandles.add(handle)
+    }
+
     /**
-     * Close the database connection.
+     * Close the database connection. Idempotent: subsequent calls are no-ops
+     * (the underlying handle is released exactly once).
+     *
+     * Releases every managed-object handle issued by this instance; objects
+     * obtained from this Lattice must not be accessed after close().
      */
     fun close() {
+        if (closed) return
+        closed = true
+        // Drop object references first so the db teardown below releases the
+        // last reference (and with it the sqlite connections / fds).
+        for (handle in issuedObjectHandles) {
+            NativeBridge.releaseObject(handle)
+        }
+        issuedObjectHandles.clear()
         // Close DB connections and stop background services FIRST
         // (mirrors Swift's Lattice.close() → lattice_db::close())
         NativeBridge.closeDb(dbHandle)
@@ -519,6 +552,7 @@ class Lattice private constructor(
 
         val obj = factory()
         obj._latticeHandle = handle
+        trackObjectHandle(handle)
         return obj as T
     }
 

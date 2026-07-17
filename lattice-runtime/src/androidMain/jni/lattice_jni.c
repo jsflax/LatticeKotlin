@@ -254,6 +254,12 @@ JNIEXPORT jstring JNICALL JNI_FN(nativeGetLastError)(JNIEnv* env, jobject thiz) 
 // Object Operations
 // =============================================================================
 
+// Release an object handle (drops the C-side reference)
+JNIEXPORT void JNICALL JNI_FN(nativeReleaseObject)(JNIEnv* env, jobject thiz, jlong objHandle) {
+    lattice_object_t* obj = (lattice_object_t*)(intptr_t)objHandle;
+    if (obj != NULL) lattice_object_release(obj);
+}
+
 JNIEXPORT jlong JNICALL JNI_FN(nativeAddObject)(JNIEnv* env, jobject thiz,
                                                  jlong dbHandle, jlong objectHandle) {
     lattice_db_t* db = (lattice_db_t*)(intptr_t)dbHandle;

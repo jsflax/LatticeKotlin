@@ -59,6 +59,9 @@ internal actual object NativeBridge {
     actual fun addObject(dbHandle: Long, objectHandle: Long): Long =
         nativeAddObject(dbHandle, objectHandle)
 
+    actual fun releaseObject(objectHandle: Long) =
+        nativeReleaseObject(objectHandle)
+
     actual fun findObject(dbHandle: Long, tableName: String, id: Long): Long =
         nativeFindObject(dbHandle, tableName, id)
 
@@ -281,6 +284,7 @@ internal actual object NativeBridge {
 
     // Object Operations
     private external fun nativeAddObject(dbHandle: Long, objectHandle: Long): Long
+    private external fun nativeReleaseObject(objectHandle: Long)
     private external fun nativeFindObject(dbHandle: Long, tableName: String, id: Long): Long
     private external fun nativeFindObjectByGlobalId(dbHandle: Long, tableName: String, globalId: String): Long
     private external fun nativeRemoveObject(dbHandle: Long, objectHandle: Long): Boolean
