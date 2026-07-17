@@ -548,8 +548,9 @@ object LatticeNative {
 
     /**
      * Build a schema list from a compact descriptor string.
-     * Format: "name:type:kind:nullable,name:type:kind:nullable,..."
-     * where type/kind are ordinals and nullable is 0/1.
+     * Format: "name:type:kind:nullable[:targetTable],..."
+     * where type/kind are ordinals, nullable is 0/1, and targetTable is the
+     * link/link-list target table name (empty or absent = none).
      * This avoids complex IR codegen that breaks on JVM/Android.
      */
     fun buildSchemaFromString(descriptor: String): List<LatticePropertyDescriptor> {
@@ -560,7 +561,8 @@ object LatticeNative {
                 name = parts[0],
                 type = LatticeType.entries[parts[1].toInt()],
                 kind = LatticePropertyKind.entries[parts[2].toInt()],
-                nullable = parts[3] == "1"
+                nullable = parts[3] == "1",
+                targetTable = parts.getOrNull(4)?.takeIf { it.isNotEmpty() }
             )
         }
     }

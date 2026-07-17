@@ -1109,7 +1109,16 @@ class LatticeIrTransformer(
                             val kindOrd = when {
                                 isLink -> 1; isLinkList -> 2; isVirtualList -> 3; else -> 0
                             }
-                            "${prop.name.asString()}:$typeOrd:$kindOrd:${if (isNullable) "1" else "0"}"
+                            // Target table for links / link lists (mirrors the
+                            // descriptor IR path above). Empty string = null.
+                            val targetTable = when {
+                                isLink -> baseForType.classOrNull?.owner?.name?.asString()
+                                isLinkList -> (pt as? org.jetbrains.kotlin.ir.types.IrSimpleType)
+                                    ?.arguments?.firstOrNull()?.typeOrNull
+                                    ?.classOrNull?.owner?.name?.asString()
+                                else -> null
+                            } ?: ""
+                            "${prop.name.asString()}:$typeOrd:$kindOrd:${if (isNullable) "1" else "0"}:$targetTable"
                         }.joinToString(",")
 
                         messageCollector.report(CompilerMessageSeverity.WARNING,
