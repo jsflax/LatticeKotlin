@@ -30,7 +30,7 @@ import platform.posix.popen
  * git object database. One-time setup (the runner also attempts it itself,
  * and CI does it explicitly):
  *
- *     git -C LatticeCore fetch origin conformance-corpus
+ *     git -C LatticeCore fetch origin conformance-corpus:refs/remotes/origin/conformance-corpus
  *
  * Resolution order for the corpus directory:
  *
@@ -38,7 +38,7 @@ import platform.posix.popen
  *    directory (containing a `corpus` subdirectory of .yaml files), or
  *    directly to a directory of .yaml corpus files.
  * 2. Default — `git -C LatticeCore show origin/conformance-corpus:...`,
- *    with one automatic `git fetch origin conformance-corpus` retry.
+ *    with one automatic `git fetch origin conformance-corpus:refs/remotes/origin/conformance-corpus` retry.
  *
  * If neither resolves, every suite test FAILS with instructions (never a
  * silent pass).
@@ -318,7 +318,7 @@ internal object CorpusSource {
         if (status != 0 && !fetchAttempted) {
             fetchAttempted = true
             println("conformance: fetching corpus branch ($what unavailable locally)…")
-            shell("git -C '$sub' fetch origin conformance-corpus 2>&1")
+            shell("git -C '$sub' fetch origin conformance-corpus:refs/remotes/origin/conformance-corpus 2>&1")
             val retry = cmd(sub)
             status = retry.first
             out = retry.second

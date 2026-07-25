@@ -22,7 +22,7 @@ jobs:
       # suite that `./gradlew build` runs) reads it from the submodule's git
       # object database without moving the release-tag pin.
       - name: Fetch conformance corpus
-        run: git -C LatticeCore fetch origin conformance-corpus
+        run: git -C LatticeCore fetch origin conformance-corpus:refs/remotes/origin/conformance-corpus
 
       - uses: actions/setup-java@v4
         with:
