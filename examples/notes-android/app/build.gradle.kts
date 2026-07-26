@@ -59,7 +59,7 @@ dependencies {
 }
 
 // Apply the Lattice compiler plugin
-val compilerPluginJar = rootProject.file("../../lattice-compiler-plugin/build/libs/lattice-compiler-plugin-0.1.0-SNAPSHOT.jar")
+val compilerPluginJar = rootProject.file("../../lattice-compiler-plugin/build/libs/lattice-compiler-plugin-1.0.0.jar")
 
 tasks.withType<KotlinCompilationTask<*>>().configureEach {
     compilerOptions {

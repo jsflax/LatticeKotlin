@@ -32,7 +32,7 @@ kotlin {
 tasks.withType<KotlinCompilationTask<*>>().configureEach {
     dependsOn(":lattice-compiler-plugin:jar")
     compilerOptions {
-        val pluginJar = project(":lattice-compiler-plugin").layout.buildDirectory.file("libs/lattice-compiler-plugin-0.10.0-SNAPSHOT.jar")
+        val pluginJar = project(":lattice-compiler-plugin").layout.buildDirectory.file("libs/lattice-compiler-plugin-1.0.0.jar")
         freeCompilerArgs.add("-Xplugin=${pluginJar.get().asFile.absolutePath}")
     }
 }

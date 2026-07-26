@@ -1,6 +1,39 @@
 # Changelog
 
-## 0.10.0-SNAPSHOT (unreleased)
+## 1.0.0 — 2026-07-25
+
+### Core
+
+- **LatticeCore pinned to `1.0.1`** (from `1.0.0-rc.1`, b5337c3 → 16828cb).
+  Core 1.0.1 ships the 62-scenario conformance corpus and the unique-DDL,
+  in-transaction read-visibility (thread-scoped), and geo-bounds dynamic-add
+  fixes. The C ABI is unchanged (header identical to the rc.1 pin); the
+  bundled `libLatticeCAPI` dylibs are rebuilt from the 1.0.1 tag.
+
+### Conformance
+
+- `transactions/own-writes-visible-inside` now PASSES and left the
+  divergence ledger: core 1.0.1 routes in-transaction reads through the
+  txn-owning (write) connection, thread-scoped — which holds here because
+  the conformance runner executes all ops on the test thread.
+- The remaining divergences are **binding parity gaps, not regressions** —
+  they are the C3 parity backlog tracked for 1.x. Ledgered (execute + xfail):
+  FTS (plugin ignores `@FullText`), KNN (`lattice_db_query_nearest`
+  unwrapped), distinct-by enumeration (`Results.distinct` affects count
+  only), and unique (`@Unique` never reaches the C ABI — core's DDL half is
+  fixed in 1.0.1, the plugin/NativeBridge half is not; the two
+  unique-violation scenarios were re-ledgered from "core (plus binding)" to
+  binding-only causes). Undeclared capabilities (loud skips): virtual
+  (VirtualLink/VirtualList/VirtualModel), geo, migration-row-transform,
+  row-cache, increment.
+
+### Changed
+
+- Root project version `0.10.0-SNAPSHOT` → `1.0.0`, aligning the Kotlin SDK
+  with the core 1.0.x line (compiler-plugin jar references updated to
+  `lattice-compiler-plugin-1.0.0.jar`).
+
+## 0.10.0-SNAPSHOT (never released — rolled into 1.0.0)
 
 ### Core
 

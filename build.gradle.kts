@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.lattice"
-version = "0.10.0-SNAPSHOT"
+version = "1.0.0"
 
 subprojects {
     group = rootProject.group

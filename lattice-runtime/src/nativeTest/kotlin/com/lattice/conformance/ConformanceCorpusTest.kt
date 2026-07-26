@@ -61,51 +61,39 @@ class ConformanceCorpusTest {
     // =========================================================================
     // Expected-divergence ledger: "suite/name" -> root-cause summary.
     //
-    // Layer legend — "core" divergences live below every binding in
-    // LatticeCore's C-ABI/core layer (all three are fixed on core main
-    // @a6c20d6 but NOT in the 1.0.0-rc.1 submodule pin; they will clear on
-    // the next core bump). "binding" divergences live in latticekotlin
-    // itself (compiler plugin / NativeBridge / Results) and only shrink by
-    // fixing the Kotlin SDK.
+    // Layer legend — every remaining entry is a "binding" divergence: it
+    // lives in latticekotlin itself (compiler plugin / NativeBridge /
+    // Results) and only shrinks by fixing the Kotlin SDK. The core-layer
+    // divergences ledgered against 1.0.0-rc.1 cleared with the 1.0.1
+    // submodule bump: transactions/own-writes-visible-inside now PASSES
+    // (verified — core 1.0.1's in-transaction read routing is thread-scoped,
+    // and this runner's ops all execute on the txn-owning test thread),
+    // while the two unique-violation scenarios below remain, reduced to
+    // their binding-only cause.
     // =========================================================================
     private val DIVERGENCE_LEDGER: Map<String, String> = buildMap {
-        // --- core layer (same three scenarios xfail in latticepython) ---
+        // --- binding layer (latticekotlin-specific; NOT present in python) ---
 
         // op: insert(expect_error=add_failed). Expected: duplicate insert into
         // a unique column fails, table keeps 2 rows. Actual: the insert
-        // SUCCEEDS (3 rows, dup present). Kotlin reaches the core gap through
-        // an extra binding gap: the compiler plugin never reads @Unique (no
+        // SUCCEEDS (3 rows, dup present). Core 1.0.1 fixed its half (unique
+        // DDL now reaches the dynamic-schema path), but the flag never gets
+        // there from Kotlin: the compiler plugin does not read @Unique (no
         // is_unique in generated descriptors) and NativeBridgeImpl hard-codes
-        // is_unique=false — but even a correctly-passed flag is dropped at DDL
-        // generation by the core (create_model_table emits no UNIQUE; the
-        // CREATE UNIQUE INDEX pass exists only in the Swift bridge).
+        // is_unique=false. Verified still diverging on the 1.0.1 pin.
         put(
             "errors/unique-violation-add-failed",
-            "core (plus binding): unique constraint never reaches DDL on the C-ABI path — " +
-                "plugin drops @Unique, NativeBridgeImpl hard-codes is_unique=false, and core " +
-                "create_model_table emits no UNIQUE (fixed on core main a6c20d6)"
+            "binding: unique flag never reaches the C ABI — plugin drops @Unique and " +
+                "NativeBridgeImpl hard-codes is_unique=false (core-side DDL gap fixed in 1.0.1)"
         )
         // op: transaction(expect_error=add_failed). Expected: inner duplicate
         // insert fails, transaction rolls back, final rows [[x, first]].
         // Actual: both inner inserts succeed and commit. Same root cause.
         put(
             "transactions/error-inside-rolls-back",
-            "core (plus binding): same unique-DDL gap — the duplicate insert inside the " +
-                "transaction succeeds instead of failing with add_failed, so nothing rolls back"
+            "binding: same is_unique gap — the duplicate insert inside the transaction " +
+                "succeeds instead of failing with add_failed, so nothing rolls back"
         )
-        // op: count inside transaction. Expected: a transaction reads its own
-        // uncommitted insert (inside == 1). Actual: inside == 0 — the C-ABI
-        // read entry points (lattice_db_count/query) always use the dedicated
-        // read-only connection, which under WAL cannot see the write
-        // connection's open transaction.
-        put(
-            "transactions/own-writes-visible-inside",
-            "core: lattice_db_count/lattice_db_query route through the read-only connection, " +
-                "so an explicit transaction on the write connection cannot read its own " +
-                "uncommitted writes (fixed on core main a6c20d6)"
-        )
-
-        // --- binding layer (latticekotlin-specific; NOT present in python) ---
 
         // FTS is core-required (undeclarable), but the Kotlin binding never
         // creates the FTS5 shadow table: the compiler plugin does not read
