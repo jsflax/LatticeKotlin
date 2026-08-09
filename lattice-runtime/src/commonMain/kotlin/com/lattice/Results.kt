@@ -246,9 +246,24 @@ class Results<T : LatticeObject>(
      * token.cancel()
      * ```
      *
+     * ### Cancelling after close
+     *
+     * Tokens may be cancelled after the lattice is closed; cancelling a token
+     * whose lattice is closed is a safe no-op, and so is cancelling the same
+     * token twice. [Lattice.close] invalidates every outstanding token before
+     * it tears the native database down, so UI code can dispose observers on
+     * unmount without having to order that against the store's lifetime:
+     *
+     * ```kotlin
+     * val token = results.observe { ... }
+     * lattice.close()
+     * token.cancel()   // no-op, not a crash
+     * ```
+     *
      * @param callback Called with the change whenever the collection changes
      * @return A Cancellable token. The observation continues until this token
-     *         is cancelled or garbage collected.
+     *         is cancelled, the owning [Lattice] is closed, or the token is
+     *         garbage collected.
      */
     fun observe(callback: (CollectionChange) -> Unit): Cancellable {
         // Platform-specific observation handled via observer registry

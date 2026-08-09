@@ -512,10 +512,21 @@ class Lattice private constructor(
      *
      * Releases every managed-object handle issued by this instance; objects
      * obtained from this Lattice must not be accessed after close().
+     *
+     * Observation tokens handed out by this instance survive close(): they are
+     * invalidated here, before the native database goes away, so cancelling
+     * one afterwards is a safe no-op. Callers do not have to order observer
+     * teardown against close().
      */
     fun close() {
         if (closed) return
         closed = true
+        // Invalidate outstanding observation tokens BEFORE the native database
+        // is closed and released. Once the handle is freed, forwarding it to
+        // the native remove-observer call would lock a mutex inside freed
+        // memory (SIGSEGV); after this returns, every cancel() is a no-op.
+        ObserverRegistry.invalidateObservers(dbHandle)
+        auditLogObserverToken = 0
         // Drop object references first so the db teardown below releases the
         // last reference (and with it the sqlite connections / fds).
         for (handle in issuedObjectHandles) {
