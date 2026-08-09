@@ -1,0 +1,74 @@
+# codegen shape: com.lattice.codegen.GoldenCollections
+
+getCounts()Ljava/util/List;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenCollections.counts:Ljava/util/List;
+
+getGlobalId()Ljava/lang/String;
+  LOAD 0
+  INVOKE com/lattice/LatticeObject$DefaultImpls.getGlobalId(Lcom/lattice/LatticeObject;)Ljava/lang/String;
+
+getId()J
+  LOAD 0
+  INVOKE com/lattice/LatticeObject$DefaultImpls.getId(Lcom/lattice/LatticeObject;)J
+
+getName()Ljava/lang/String;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenCollections._lattice_handle_field_GoldenCollections:J
+  CONST "name"
+  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+
+getTags()Ljava/util/List;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenCollections._lattice_handle_field_GoldenCollections:J
+  CONST "tags"
+  INVOKE com/lattice/LatticeNative.getStringList(JLjava/lang/String;)Ljava/util/List;
+
+get_latticeHandle()J
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenCollections._lattice_handle_field_GoldenCollections:J
+
+get_latticeSchema()Ljava/util/List;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  CONST "name:2:0:0:,tags:2:0:0:,counts:2:0:0:"
+  INVOKE com/lattice/LatticeNative.buildSchemaFromString(Ljava/lang/String;)Ljava/util/List;
+
+get_latticeTableName()Ljava/lang/String;
+  CONST "GoldenCollections"
+
+setCounts(Ljava/util/List;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  LOAD 0
+  LOAD 1
+  FIELD com/lattice/codegen/GoldenCollections.counts:Ljava/util/List;
+
+setName(Ljava/lang/String;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenCollections._lattice_handle_field_GoldenCollections:J
+  CONST "name"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+setTags(Ljava/util/List;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenCollections._lattice_handle_field_GoldenCollections:J
+  CONST "tags"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setStringList(JLjava/lang/String;Ljava/util/List;)V
+
+set_latticeHandle(J)V
+  LOAD 0
+  LOAD 1
+  FIELD com/lattice/codegen/GoldenCollections._lattice_handle_field_GoldenCollections:J

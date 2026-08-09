@@ -95,6 +95,16 @@ kotlin {
                 implementation("io.ktor:ktor-client-okhttp:2.3.7")
             }
         }
+
+        // Codegen golden tests: compile @Model fixtures through the real -Xplugin
+        // path and assert on the emitted bytecode. Runs on the JVM, so it needs no
+        // native library — it checks what the transform WROTE, not what it stores.
+        val androidUnitTest by getting {
+            dependencies {
+                implementation(kotlin("test"))
+                implementation("org.ow2.asm:asm-util:9.7")
+            }
+        }
     }
 
     targets.withType<org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget> {
@@ -252,13 +262,36 @@ mavenPublishing {
     }
 }
 
+// Codegen golden tests resolve their goldens relative to the module dir, and
+// opt into regeneration via -Dlattice.golden.update=true (forwarded, not inherited).
+tasks.withType<Test>().configureEach {
+    systemProperty("lattice.module.dir", projectDir.absolutePath)
+    System.getProperty("lattice.golden.update")?.let { systemProperty("lattice.golden.update", it) }
+}
+
 // Apply compiler plugin to test compilations
 tasks.withType<KotlinCompilationTask<*>>().matching {
     it.name.contains("Test", ignoreCase = true)
 }.configureEach {
     dependsOn(":lattice-compiler-plugin:jar")
+    val pluginJar = compilerPluginProject.layout.buildDirectory
+        .file("libs/lattice-compiler-plugin-${project.version}.jar")
     compilerOptions {
-        val pluginJar = compilerPluginProject.layout.buildDirectory.file("libs/lattice-compiler-plugin-1.0.0.jar")
         freeCompilerArgs.add("-Xplugin=${pluginJar.get().asFile.absolutePath}")
+    }
+
+    // `-Xplugin=<path>` is an opaque string to Gradle, so the jar's CONTENTS are
+    // not a tracked input: editing the transformer and re-running left the previous
+    // compilation up-to-date and the tests validated stale bytecode. Register it
+    // explicitly or the codegen goldens verify nothing.
+    inputs.file(pluginJar)
+        .withPropertyName("latticeCompilerPluginJar")
+        .withPathSensitivity(PathSensitivity.NONE)
+
+    // A missing jar silently DISABLES the transform rather than failing, so a
+    // version bump would produce a green build with no generated accessors.
+    doFirst {
+        val jar = pluginJar.get().asFile
+        check(jar.exists()) { "Lattice compiler plugin jar missing: $jar — the @Model transform would silently no-op." }
     }
 }

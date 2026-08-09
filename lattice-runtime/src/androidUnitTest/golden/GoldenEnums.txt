@@ -1,0 +1,119 @@
+# codegen shape: com.lattice.codegen.GoldenEnums
+
+getGlobalId()Ljava/lang/String;
+  LOAD 0
+  INVOKE com/lattice/LatticeObject$DefaultImpls.getGlobalId(Lcom/lattice/LatticeObject;)Ljava/lang/String;
+
+getId()J
+  LOAD 0
+  INVOKE com/lattice/LatticeObject$DefaultImpls.getId(Lcom/lattice/LatticeObject;)J
+
+getPriority()Lcom/lattice/codegen/GoldenPriority;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenEnums._lattice_handle_field_GoldenEnums:J
+  CONST "priority"
+  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+  INVOKE com/lattice/codegen/GoldenPriority.valueOf(Ljava/lang/String;)Lcom/lattice/codegen/GoldenPriority;
+
+getPriorityOpt()Lcom/lattice/codegen/GoldenPriority;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenEnums._lattice_handle_field_GoldenEnums:J
+  CONST "priorityOpt"
+  INVOKE com/lattice/LatticeNative.getStringOrNull(JLjava/lang/String;)Ljava/lang/String;
+  INVOKE com/lattice/codegen/GoldenPriority.valueOf(Ljava/lang/String;)Lcom/lattice/codegen/GoldenPriority;
+
+getStatus()Lcom/lattice/codegen/GoldenStatus;
+  INVOKE com/lattice/codegen/GoldenStatus.values()[Lcom/lattice/codegen/GoldenStatus;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenEnums._lattice_handle_field_GoldenEnums:J
+  CONST "status"
+  INVOKE com/lattice/LatticeNative.getInt(JLjava/lang/String;)I
+
+getStatusOpt()Lcom/lattice/codegen/GoldenStatus;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenEnums._lattice_handle_field_GoldenEnums:J
+  CONST "statusOpt"
+  INVOKE com/lattice/LatticeNative.hasValue(JLjava/lang/String;)Z
+  INVOKE com/lattice/codegen/GoldenStatus.values()[Lcom/lattice/codegen/GoldenStatus;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenEnums._lattice_handle_field_GoldenEnums:J
+  CONST "statusOpt"
+  INVOKE com/lattice/LatticeNative.getInt(JLjava/lang/String;)I
+
+get_latticeHandle()J
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenEnums._lattice_handle_field_GoldenEnums:J
+
+get_latticeSchema()Ljava/util/List;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  CONST "priority:2:0:0:,priorityOpt:2:0:1:,status:0:0:0:,statusOpt:0:0:1:"
+  INVOKE com/lattice/LatticeNative.buildSchemaFromString(Ljava/lang/String;)Ljava/util/List;
+
+get_latticeTableName()Ljava/lang/String;
+  CONST "GoldenEnums"
+
+setPriority(Lcom/lattice/codegen/GoldenPriority;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenEnums._lattice_handle_field_GoldenEnums:J
+  CONST "priority"
+  LOAD 1
+  INVOKE com/lattice/codegen/GoldenPriority.name()Ljava/lang/String;
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+setPriorityOpt(Lcom/lattice/codegen/GoldenPriority;)V
+  LOAD 1
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenEnums._lattice_handle_field_GoldenEnums:J
+  CONST "priorityOpt"
+  INVOKE com/lattice/LatticeNative.setNull(JLjava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenEnums._lattice_handle_field_GoldenEnums:J
+  CONST "priorityOpt"
+  LOAD 1
+  INVOKE com/lattice/codegen/GoldenPriority.name()Ljava/lang/String;
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+setStatus(Lcom/lattice/codegen/GoldenStatus;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenEnums._lattice_handle_field_GoldenEnums:J
+  CONST "status"
+  LOAD 1
+  INVOKE com/lattice/codegen/GoldenStatus.ordinal()I
+  INVOKE java/lang/Integer.valueOf(I)Ljava/lang/Integer;
+  INVOKE com/lattice/LatticeNative.setInt(JLjava/lang/String;Ljava/lang/Integer;)V
+
+setStatusOpt(Lcom/lattice/codegen/GoldenStatus;)V
+  LOAD 1
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenEnums._lattice_handle_field_GoldenEnums:J
+  CONST "statusOpt"
+  INVOKE com/lattice/LatticeNative.setNull(JLjava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenEnums._lattice_handle_field_GoldenEnums:J
+  CONST "statusOpt"
+  LOAD 1
+  INVOKE com/lattice/codegen/GoldenStatus.ordinal()I
+  INVOKE java/lang/Integer.valueOf(I)Ljava/lang/Integer;
+  INVOKE com/lattice/LatticeNative.setInt(JLjava/lang/String;Ljava/lang/Integer;)V
+
+set_latticeHandle(J)V
+  LOAD 0
+  LOAD 1
+  FIELD com/lattice/codegen/GoldenEnums._lattice_handle_field_GoldenEnums:J
