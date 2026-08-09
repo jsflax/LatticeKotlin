@@ -1,9 +1,10 @@
 import com.vanniktech.maven.publish.SonatypeHost
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
 
 plugins {
     kotlin("multiplatform")
-    kotlin("plugin.serialization") version "2.0.21"
+    kotlin("plugin.serialization") version "2.4.10"
     id("com.android.library")
     id("com.vanniktech.maven.publish")
 }
@@ -19,10 +20,8 @@ kotlin {
     // Android target (JVM-based, produces AAR)
     androidTarget {
         publishLibraryVariants("release")
-        compilations.all {
-            kotlinOptions {
-                jvmTarget = "17"
-            }
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_17)
         }
     }
 
@@ -95,6 +94,16 @@ kotlin {
                 implementation("io.ktor:ktor-client-okhttp:2.3.7")
             }
         }
+
+        // Codegen golden tests: compile @Model fixtures through the real -Xplugin
+        // path and assert on the emitted bytecode. Runs on the JVM, so it needs no
+        // native library — it checks what the transform WROTE, not what it stores.
+        val androidUnitTest by getting {
+            dependencies {
+                implementation(kotlin("test"))
+                implementation("org.ow2.asm:asm-util:9.7")
+            }
+        }
     }
 
     targets.withType<org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget> {
@@ -103,7 +112,7 @@ kotlin {
         compilations.getByName("main") {
             cinterops {
                 create("lattice") {
-                    defFile = file("src/nativeInterop/cinterop/lattice.def")
+                    definitionFile.set(file("src/nativeInterop/cinterop/lattice.def"))
 
                     // Set include and library paths
                     includeDirs(libsDir)
@@ -252,13 +261,28 @@ mavenPublishing {
     }
 }
 
+// Codegen golden tests resolve their goldens relative to the module dir, and
+// opt into regeneration via -Dlattice.golden.update=true (forwarded, not inherited).
+tasks.withType<Test>().configureEach {
+    systemProperty("lattice.module.dir", projectDir.absolutePath)
+    System.getProperty("lattice.golden.update")?.let { systemProperty("lattice.golden.update", it) }
+}
+
 // Apply compiler plugin to test compilations
 tasks.withType<KotlinCompilationTask<*>>().matching {
     it.name.contains("Test", ignoreCase = true)
 }.configureEach {
     dependsOn(":lattice-compiler-plugin:jar")
+    // Version-derived, never hardcoded: `-Xplugin` pointing at a missing jar SILENTLY
+    // disables the @Model transform rather than failing, so a version bump used to
+    // produce a green build with no generated accessors. The doFirst makes it loud.
+    val pluginJar = compilerPluginProject.layout.buildDirectory
+        .file("libs/lattice-compiler-plugin-${project.version}.jar")
     compilerOptions {
-        val pluginJar = compilerPluginProject.layout.buildDirectory.file("libs/lattice-compiler-plugin-1.0.0.jar")
         freeCompilerArgs.add("-Xplugin=${pluginJar.get().asFile.absolutePath}")
+    }
+    doFirst {
+        val jar = pluginJar.get().asFile
+        check(jar.exists()) { "Lattice compiler plugin jar missing: $jar — the @Model transform would silently no-op." }
     }
 }
