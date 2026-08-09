@@ -95,6 +95,18 @@ kotlin {
                 implementation("io.ktor:ktor-client-okhttp:2.3.7")
             }
         }
+
+        // Instrumented tests: the JNI bridge and the prebuilt LatticeCAPI .so
+        // only exist on a device/emulator, so anything that crosses the native
+        // boundary has to be tested there rather than in a JVM unit test.
+        val androidInstrumentedTest by getting {
+            dependencies {
+                implementation("junit:junit:4.13.2")
+                implementation("androidx.test:runner:1.6.2")
+                implementation("androidx.test:core:1.6.1")
+                implementation("androidx.test.ext:junit:1.2.1")
+            }
+        }
     }
 
     targets.withType<org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget> {
@@ -140,6 +152,8 @@ android {
 
     defaultConfig {
         minSdk = 26
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Configure NDK build
         ndk {

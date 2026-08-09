@@ -21,6 +21,21 @@ tasks.test {
     useJUnitPlatform()
 }
 
+// The Kotlin daemon that compiles the Android source sets runs on JDK 17 and
+// has to be able to load this jar (the runtime's test compilations apply it
+// via -Xplugin). Target 17 rather than whatever JDK Gradle happens to run on,
+// which otherwise produces class files the daemon rejects.
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
 mavenPublishing {
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
     signAllPublications()
