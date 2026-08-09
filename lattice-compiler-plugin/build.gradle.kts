@@ -17,6 +17,22 @@ dependencies {
     testImplementation("com.github.tschuchortdev:kotlin-compile-testing:1.5.0")
 }
 
+// The plugin jar is loaded BY a Kotlin compile daemon, so its bytecode level must
+// be <= the daemon's JDK. lattice-runtime's Android compilations run on JDK 17
+// (jvmTarget = 17), and without this the daemon rejects the jar with
+// UnsupportedClassVersionError — which surfaces only on the JVM/Android path,
+// never on native.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
 tasks.test {
     useJUnitPlatform()
 }

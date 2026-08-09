@@ -1,0 +1,81 @@
+# codegen shape: com.lattice.codegen.GoldenEmbeds
+
+getAddress()Lcom/lattice/codegen/GoldenAddress;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenEmbeds._lattice_handle_field_GoldenEmbeds:J
+  CONST "address"
+  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+  TYPE com/lattice/codegen/GoldenAddress
+
+getGlobalId()Ljava/lang/String;
+  LOAD 0
+  INVOKE com/lattice/LatticeObject$DefaultImpls.getGlobalId(Lcom/lattice/LatticeObject;)Ljava/lang/String;
+
+getId()J
+  LOAD 0
+  INVOKE com/lattice/LatticeObject$DefaultImpls.getId(Lcom/lattice/LatticeObject;)J
+
+getName()Ljava/lang/String;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenEmbeds._lattice_handle_field_GoldenEmbeds:J
+  CONST "name"
+  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+
+getWorkAddress()Lcom/lattice/codegen/GoldenAddress;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenEmbeds._lattice_handle_field_GoldenEmbeds:J
+  CONST "workAddress"
+  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+  TYPE com/lattice/codegen/GoldenAddress
+
+get_latticeHandle()J
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenEmbeds._lattice_handle_field_GoldenEmbeds:J
+
+get_latticeSchema()Ljava/util/List;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  CONST "name:2:0:0:,address:2:0:0:,workAddress:2:0:1:"
+  INVOKE com/lattice/LatticeNative.buildSchemaFromString(Ljava/lang/String;)Ljava/util/List;
+
+get_latticeTableName()Ljava/lang/String;
+  CONST "GoldenEmbeds"
+
+setAddress(Lcom/lattice/codegen/GoldenAddress;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenEmbeds._lattice_handle_field_GoldenEmbeds:J
+  CONST "address"
+  LOAD 1
+  TYPE java/lang/String
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+setName(Ljava/lang/String;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenEmbeds._lattice_handle_field_GoldenEmbeds:J
+  CONST "name"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+setWorkAddress(Lcom/lattice/codegen/GoldenAddress;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenEmbeds._lattice_handle_field_GoldenEmbeds:J
+  CONST "workAddress"
+  LOAD 1
+  TYPE java/lang/String
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+set_latticeHandle(J)V
+  LOAD 0
+  LOAD 1
+  FIELD com/lattice/codegen/GoldenEmbeds._lattice_handle_field_GoldenEmbeds:J

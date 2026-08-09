@@ -1,0 +1,77 @@
+# codegen shape: com.lattice.codegen.GoldenTemporal
+
+getEndTime()Lkotlinx/datetime/Instant;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenTemporal._lattice_handle_field_GoldenTemporal:J
+  CONST "endTime"
+  INVOKE com/lattice/LatticeNative.getInstantOrNull(JLjava/lang/String;)Lkotlinx/datetime/Instant;
+
+getGlobalId()Ljava/lang/String;
+  LOAD 0
+  INVOKE com/lattice/LatticeObject$DefaultImpls.getGlobalId(Lcom/lattice/LatticeObject;)Ljava/lang/String;
+
+getId()J
+  LOAD 0
+  INVOKE com/lattice/LatticeObject$DefaultImpls.getId(Lcom/lattice/LatticeObject;)J
+
+getStartTime()Lkotlinx/datetime/Instant;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenTemporal._lattice_handle_field_GoldenTemporal:J
+  CONST "startTime"
+  INVOKE com/lattice/LatticeNative.getInstant(JLjava/lang/String;)Lkotlinx/datetime/Instant;
+
+getTitle()Ljava/lang/String;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenTemporal._lattice_handle_field_GoldenTemporal:J
+  CONST "title"
+  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+
+get_latticeHandle()J
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenTemporal._lattice_handle_field_GoldenTemporal:J
+
+get_latticeSchema()Ljava/util/List;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  CONST "title:2:0:0:,startTime:1:0:0:,endTime:1:0:1:"
+  INVOKE com/lattice/LatticeNative.buildSchemaFromString(Ljava/lang/String;)Ljava/util/List;
+
+get_latticeTableName()Ljava/lang/String;
+  CONST "GoldenTemporal"
+
+setEndTime(Lkotlinx/datetime/Instant;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenTemporal._lattice_handle_field_GoldenTemporal:J
+  CONST "endTime"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setInstant(JLjava/lang/String;Lkotlinx/datetime/Instant;)V
+
+setStartTime(Lkotlinx/datetime/Instant;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenTemporal._lattice_handle_field_GoldenTemporal:J
+  CONST "startTime"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setInstant(JLjava/lang/String;Lkotlinx/datetime/Instant;)V
+
+setTitle(Ljava/lang/String;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenTemporal._lattice_handle_field_GoldenTemporal:J
+  CONST "title"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+set_latticeHandle(J)V
+  LOAD 0
+  LOAD 1
+  FIELD com/lattice/codegen/GoldenTemporal._lattice_handle_field_GoldenTemporal:J

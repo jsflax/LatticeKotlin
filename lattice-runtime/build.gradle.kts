@@ -273,14 +273,23 @@ tasks.withType<KotlinCompilationTask<*>>().matching {
     it.name.contains("Test", ignoreCase = true)
 }.configureEach {
     dependsOn(":lattice-compiler-plugin:jar")
-    // Version-derived, never hardcoded: `-Xplugin` pointing at a missing jar SILENTLY
-    // disables the @Model transform rather than failing, so a version bump used to
-    // produce a green build with no generated accessors. The doFirst makes it loud.
+    // Version-derived, never hardcoded.
     val pluginJar = compilerPluginProject.layout.buildDirectory
         .file("libs/lattice-compiler-plugin-${project.version}.jar")
     compilerOptions {
         freeCompilerArgs.add("-Xplugin=${pluginJar.get().asFile.absolutePath}")
     }
+
+    // `-Xplugin=<path>` is an opaque string to Gradle, so the jar's CONTENTS are
+    // not a tracked input: editing the transformer and re-running left the previous
+    // compilation up-to-date and the tests validated stale bytecode. Register it
+    // explicitly or the codegen goldens verify nothing.
+    inputs.file(pluginJar)
+        .withPropertyName("latticeCompilerPluginJar")
+        .withPathSensitivity(PathSensitivity.NONE)
+
+    // A missing jar silently DISABLES the transform rather than failing, so a
+    // version bump would produce a green build with no generated accessors.
     doFirst {
         val jar = pluginJar.get().asFile
         check(jar.exists()) { "Lattice compiler plugin jar missing: $jar — the @Model transform would silently no-op." }
