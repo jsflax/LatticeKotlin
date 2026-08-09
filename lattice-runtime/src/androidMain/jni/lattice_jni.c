@@ -111,6 +111,7 @@ JNIEXPORT jlong JNICALL JNI_FN(nativeCreateDbWithSchemaArrays)(JNIEnv* env, jobj
                                                                 jbooleanArray propNullable,
                                                                 jobjectArray propTargetTables,
                                                                 jobjectArray propLinkTables,
+                                                                jintArray propFlags,
                                                                 jstring syncEndpoint,
                                                                 jstring authToken) {
     char* c_path = jstring_to_cstring(env, path);
@@ -140,6 +141,10 @@ JNIEXPORT jlong JNICALL JNI_FN(nativeCreateDbWithSchemaArrays)(JNIEnv* env, jobj
     jint* p_types = (*env)->GetIntArrayElements(env, propTypes, NULL);
     jint* p_kinds = (*env)->GetIntArrayElements(env, propKinds, NULL);
     jboolean* p_nullable = (*env)->GetBooleanArrayElements(env, propNullable, NULL);
+    // Constraint bits: 1 = unique, 2 = indexed, 4 = full-text. This is the path
+    // that decides table DDL, so it is where @Unique must arrive for LatticeCore
+    // to emit CREATE UNIQUE INDEX.
+    jint* p_flags = (*env)->GetIntArrayElements(env, propFlags, NULL);
 
     // Allocate C schema structures
     lattice_schema_t* schemas = (lattice_schema_t*)calloc(num_tables, sizeof(lattice_schema_t));
@@ -148,6 +153,7 @@ JNIEXPORT jlong JNICALL JNI_FN(nativeCreateDbWithSchemaArrays)(JNIEnv* env, jobj
         (*env)->ReleaseIntArrayElements(env, propTypes, p_types, JNI_ABORT);
         (*env)->ReleaseIntArrayElements(env, propKinds, p_kinds, JNI_ABORT);
         (*env)->ReleaseBooleanArrayElements(env, propNullable, p_nullable, JNI_ABORT);
+        (*env)->ReleaseIntArrayElements(env, propFlags, p_flags, JNI_ABORT);
         free(c_path);
         free(c_endpoint);
         free(c_token);
@@ -193,6 +199,11 @@ JNIEXPORT jlong JNICALL JNI_FN(nativeCreateDbWithSchemaArrays)(JNIEnv* env, jobj
                     props[p].link_table = jstring_to_cstring(env, j_link);
                     (*env)->DeleteLocalRef(env, j_link);
                 }
+
+                // Constraint flags
+                props[p].is_unique    = (p_flags[prop_idx] & 1) != 0;
+                props[p].is_indexed   = (p_flags[prop_idx] & 2) != 0;
+                props[p].is_full_text = (p_flags[prop_idx] & 4) != 0;
             }
         }
     }
@@ -202,6 +213,7 @@ JNIEXPORT jlong JNICALL JNI_FN(nativeCreateDbWithSchemaArrays)(JNIEnv* env, jobj
     (*env)->ReleaseIntArrayElements(env, propTypes, p_types, JNI_ABORT);
     (*env)->ReleaseIntArrayElements(env, propKinds, p_kinds, JNI_ABORT);
     (*env)->ReleaseBooleanArrayElements(env, propNullable, p_nullable, JNI_ABORT);
+    (*env)->ReleaseIntArrayElements(env, propFlags, p_flags, JNI_ABORT);
 
     // Create database
     lattice_db_t* db;
@@ -787,14 +799,18 @@ JNIEXPORT jlong JNICALL JNI_FN(nativeCreateObjectWithSchema)(JNIEnv* env, jobjec
         props[i].type = (lattice_column_type_t)json_extract_int(entry, "type");
         props[i].kind = (lattice_property_kind_t)json_extract_int(entry, "kind");
         props[i].nullable = json_extract_bool(entry, "nullable");
-        props[i].is_indexed = json_extract_bool(entry, "isIndexed");
-        props[i].is_unique = json_extract_bool(entry, "isUnique");
-        props[i].is_full_text = json_extract_bool(entry, "isFullText");
-        props[i].is_vector = json_extract_bool(entry, "isVector");
-        props[i].is_geo_bounds = json_extract_bool(entry, "isGeoBounds");
-        props[i].target_table = json_extract_string(entry, "targetTable");
-        props[i].link_table = json_extract_string(entry, "linkTable");
-        props[i].column_name = json_extract_string(entry, "columnName");
+        // snake_case: these keys must match what LatticeNative.buildSchemaJson
+        // emits and what NativeBridgeImpl parses. This block previously read
+        // camelCase, so target_table was silently NULL for every @Link/@LinkList
+        // on Android while working correctly on native.
+        props[i].is_indexed = json_extract_bool(entry, "is_indexed");
+        props[i].is_unique = json_extract_bool(entry, "is_unique");
+        props[i].is_full_text = json_extract_bool(entry, "is_full_text");
+        props[i].is_vector = json_extract_bool(entry, "is_vector");
+        props[i].is_geo_bounds = json_extract_bool(entry, "is_geo_bounds");
+        props[i].target_table = json_extract_string(entry, "target_table");
+        props[i].link_table = json_extract_string(entry, "link_table");
+        props[i].column_name = json_extract_string(entry, "column_name");
     }
 
     lattice_object_t* obj = lattice_object_create_with_schema(c_table, props, prop_count);

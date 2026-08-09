@@ -39,12 +39,13 @@ internal actual object NativeBridge {
         propNullable: BooleanArray,
         propTargetTables: Array<String?>,
         propLinkTables: Array<String?>,
+        propFlags: IntArray,
         syncEndpoint: String?,
         authToken: String?
     ): Long = nativeCreateDbWithSchemaArrays(
         path, tableNames, propertyCounts,
         propNames, propTypes, propKinds, propNullable,
-        propTargetTables, propLinkTables,
+        propTargetTables, propLinkTables, propFlags,
         syncEndpoint, authToken
     )
 
@@ -275,6 +276,7 @@ internal actual object NativeBridge {
         propNullable: BooleanArray,
         propTargetTables: Array<String?>,
         propLinkTables: Array<String?>,
+        propFlags: IntArray,
         syncEndpoint: String?,
         authToken: String?
     ): Long

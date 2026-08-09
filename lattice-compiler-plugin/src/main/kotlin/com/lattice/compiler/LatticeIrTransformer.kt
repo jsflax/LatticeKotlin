@@ -75,6 +75,9 @@ class LatticeIrTransformer(
     private val linkListAnnotationFqn = FqName("com.lattice.LinkList")
     private val embeddedAnnotationFqn = FqName("com.lattice.Embedded")
     private val latticeEnumAnnotationFqn = FqName("com.lattice.LatticeEnum")
+    private val uniqueAnnotationFqn = FqName("com.lattice.Unique")
+    private val indexedAnnotationFqn = FqName("com.lattice.Indexed")
+    private val fullTextAnnotationFqn = FqName("com.lattice.FullText")
     private val latticeObjectFqn = FqName("com.lattice.LatticeObject")
     private val latticeNativeFqn = FqName("com.lattice.LatticeNative")
     private val latticePropertyDescriptorFqn = FqName("com.lattice.LatticePropertyDescriptor")
@@ -1119,7 +1122,14 @@ class LatticeIrTransformer(
                                     ?.classOrNull?.owner?.name?.asString()
                                 else -> null
                             } ?: ""
-                            "${prop.name.asString()}:$typeOrd:$kindOrd:${if (isNullable) "1" else "0"}:$targetTable"
+                            // Constraint flags as a bitfield. Until now the plugin
+                            // DECLARED @Unique/@Indexed/@FullText but never read them, so
+                            // LatticeCore's CREATE UNIQUE INDEX path could never fire —
+                            // the annotations were silent no-ops all the way down.
+                            val flags = (if (prop.hasAnnotation(uniqueAnnotationFqn)) 1 else 0) or
+                                (if (prop.hasAnnotation(indexedAnnotationFqn)) 2 else 0) or
+                                (if (prop.hasAnnotation(fullTextAnnotationFqn)) 4 else 0)
+                            "${prop.name.asString()}:$typeOrd:$kindOrd:${if (isNullable) "1" else "0"}:$targetTable:$flags"
                         }.joinToString(",")
 
                         messageCollector.report(CompilerMessageSeverity.WARNING,
@@ -2103,14 +2113,50 @@ class LatticeIrTransformer(
                 return
             }
 
+            // Fall back instead of trapping on an unknown stored value. `valueOf`
+            // THROWS for a name that matches no entry — a value written by a newer
+            // client, or an entry removed since the row was written — where Swift's
+            // Lattice substitutes a default. Resolve the name through a runtime
+            // helper first so `valueOf` is guaranteed safe; the fallback index is
+            // computed here, at compile time, from @LatticeEnum(defaultValue).
+            val enumEntryNames = enumClass.declarations
+                .filterIsInstance<IrEnumEntry>()
+                .map { it.name.asString() }
+            val declaredDefault = getEnumDefaultValue(propertyType)
+            val defaultIndex = enumEntryNames.indexOf(declaredDefault).takeIf { it >= 0 } ?: 0
+            if (declaredDefault.isNotEmpty() && enumEntryNames.none { it == declaredDefault }) {
+                messageCollector.report(
+                    CompilerMessageSeverity.WARNING,
+                    "Lattice: @LatticeEnum(defaultValue = \"$declaredDefault\") on '$propertyName' " +
+                        "names no entry of ${enumClass.name}; falling back to ${enumEntryNames.firstOrNull()}"
+                )
+            }
+            val valuesFnForNames = enumClass.functions.find { it.name.asString() == "values" }
+            val nameResolver = findLatticeNativeFunction(
+                latticeNativeSymbol,
+                if (isNullable) "enumNameOrNull" else "enumNameOrDefault"
+            )
+
             getter.body = DeclarationIrBuilder(pluginContext, getter.symbol).irBlockBody {
                 val thisReceiver = getter.dispatchReceiverParameter!!
 
                 // val name = LatticeNative.getString(_latticeHandle, "propertyName")
-                val nameValue = irCall(nativeGetter).apply {
+                val rawName = irCall(nativeGetter).apply {
                     dispatchReceiver = irGetObject(latticeNativeSymbol)
                     putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
                     putValueArgument(1, irString(propertyName))
+                }
+
+                // LatticeNative.enumNameOrDefault(EnumClass.values(), name, defaultIndex)
+                val nameValue = if (nameResolver != null && valuesFnForNames != null) {
+                    irCall(nameResolver).apply {
+                        dispatchReceiver = irGetObject(latticeNativeSymbol)
+                        putValueArgument(0, irCall(valuesFnForNames))
+                        putValueArgument(1, rawName)
+                        if (!isNullable) putValueArgument(2, irInt(defaultIndex))
+                    }
+                } else {
+                    rawName
                 }
 
                 if (isNullable) {
@@ -2400,6 +2446,19 @@ class LatticeIrTransformer(
         // simply ABSENT, so a missing entry means `false` (the declared default).
         val arg = annotation.getValueArgument(Name.identifier("storeAsOrdinal"))
         return (arg as? IrConst)?.value as? Boolean ?: false
+    }
+
+    /**
+     * The entry name from `@LatticeEnum(defaultValue = ...)`, or "" when absent
+     * (meaning: fall back to the first declared entry).
+     */
+    private fun getEnumDefaultValue(type: IrType): String {
+        val classOwner = type.classOrNull?.owner ?: return ""
+        val annotation = classOwner.annotations.find { ann ->
+            ann.type.classOrNull?.owner?.fqNameWhenAvailable == latticeEnumAnnotationFqn
+        } ?: return ""
+        val arg = annotation.getValueArgument(Name.identifier("defaultValue"))
+        return (arg as? IrConst)?.value as? String ?: ""
     }
 
     private fun findLatticeNativeFunction(latticeNativeSymbol: IrClassSymbol, name: String): IrSimpleFunctionSymbol? {

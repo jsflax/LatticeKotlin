@@ -156,6 +156,27 @@ class GeneratedAccessorGoldenTest {
             ops += "CONST $operand"
         }
 
+        /**
+         * Small integers compile to ICONST_*, which carry their value in the
+         * opcode rather than an operand — so without this a compile-time-computed
+         * index (the @LatticeEnum fallback, an argument position) would be
+         * invisible to the golden and free to change silently.
+         */
+        override fun visitInsn(opcode: Int) {
+            val literal = when (opcode) {
+                Opcodes.ICONST_M1 -> "-1"
+                Opcodes.ICONST_0, Opcodes.LCONST_0, Opcodes.FCONST_0, Opcodes.DCONST_0 -> "0"
+                Opcodes.ICONST_1, Opcodes.LCONST_1, Opcodes.FCONST_1, Opcodes.DCONST_1 -> "1"
+                Opcodes.ICONST_2, Opcodes.FCONST_2 -> "2"
+                Opcodes.ICONST_3 -> "3"
+                Opcodes.ICONST_4 -> "4"
+                Opcodes.ICONST_5 -> "5"
+                Opcodes.ACONST_NULL -> "null"
+                else -> return
+            }
+            ops += "CONST $literal"
+        }
+
         override fun visitFieldInsn(opcode: Int, owner: String, name: String, descriptor: String) {
             ops += "FIELD $owner.$name:$descriptor"
         }

@@ -206,6 +206,7 @@ class Lattice private constructor(
                 schemaArrays.propNullable,
                 schemaArrays.propTargetTables,
                 schemaArrays.propLinkTables,
+                schemaArrays.propFlags,
                 config.syncEndpoint,
                 config.authorizationToken
             )
@@ -286,7 +287,9 @@ class Lattice private constructor(
         val propKinds: IntArray,
         val propNullable: BooleanArray,
         val propTargetTables: Array<String?>,
-        val propLinkTables: Array<String?>
+        val propLinkTables: Array<String?>,
+        /** Per-property constraint bits: 1 = unique, 2 = indexed, 4 = full-text. */
+        val propFlags: IntArray
     )
 
     private fun buildSchemaArrays(schemas: List<Pair<String, List<LatticePropertyDescriptor>>>): SchemaArrays {
@@ -298,6 +301,7 @@ class Lattice private constructor(
         val propNullable = mutableListOf<Boolean>()
         val propTargetTables = mutableListOf<String?>()
         val propLinkTables = mutableListOf<String?>()
+        val propFlags = mutableListOf<Int>()
 
         schemas.forEach { (tableName, properties) ->
             tableNames.add(tableName)
@@ -322,6 +326,12 @@ class Lattice private constructor(
                 })
                 propNullable.add(prop.nullable)
                 propTargetTables.add(prop.targetTable)
+                // Constraint bits, mirroring LatticeNative's schema-string flags.
+                propFlags.add(
+                    (if (prop.isUnique) 1 else 0) or
+                        (if (prop.isIndexed) 2 else 0) or
+                        (if (prop.isFullText) 4 else 0)
+                )
                 propLinkTables.add(prop.linkTable)
             }
         }
@@ -334,7 +344,8 @@ class Lattice private constructor(
             propKinds = propKinds.toIntArray(),
             propNullable = propNullable.toBooleanArray(),
             propTargetTables = propTargetTables.toTypedArray(),
-            propLinkTables = propLinkTables.toTypedArray()
+            propLinkTables = propLinkTables.toTypedArray(),
+            propFlags = propFlags.toIntArray()
         )
     }
 

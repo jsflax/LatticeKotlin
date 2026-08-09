@@ -115,10 +115,16 @@ enum class GoldenPriority { LOW, MEDIUM, HIGH }
 @LatticeEnum(storeAsOrdinal = true)
 enum class GoldenStatus { PENDING, ACTIVE, DONE }
 
+/** Explicit fallback entry, rather than the first-declared default. */
+@LatticeEnum(defaultValue = "TRIAGE")
+enum class GoldenSeverity { CRITICAL, TRIAGE, MINOR }
+
 @Model
 class GoldenEnums {
     var priority: GoldenPriority = GoldenPriority.MEDIUM
     var priorityOpt: GoldenPriority? = null
     var status: GoldenStatus = GoldenStatus.PENDING
     var statusOpt: GoldenStatus? = null
+    var severity: GoldenSeverity = GoldenSeverity.TRIAGE
+    var severityOpt: GoldenSeverity? = null
 }

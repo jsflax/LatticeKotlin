@@ -42,6 +42,8 @@ getOne()Lcom/lattice/codegen/GoldenLinkTarget;
   INVOKE com/lattice/LatticeNative.getObjectHandle(JLjava/lang/String;)J
   LOAD 1
   LOAD 1
+  CONST 0
+  CONST null
   TYPE com/lattice/codegen/GoldenLinkTarget
   INVOKE com/lattice/codegen/GoldenLinkTarget.<init>()V
   LOAD 3
@@ -58,7 +60,7 @@ get_latticeHandle()J
 
 get_latticeSchema()Ljava/util/List;
   FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
-  CONST "name:2:0:0:,one:0:1:1:GoldenLinkTarget,many:0:2:0:GoldenLinkTarget"
+  CONST "name:2:0:0::0,one:0:1:1:GoldenLinkTarget:0,many:0:2:0:GoldenLinkTarget:0"
   INVOKE com/lattice/LatticeNative.buildSchemaFromString(Ljava/lang/String;)Ljava/util/List;
 
 get_latticeTableName()Ljava/lang/String;
@@ -82,6 +84,7 @@ setName(Ljava/lang/String;)V
 
 setOne(Lcom/lattice/codegen/GoldenLinkTarget;)V
   LOAD 1
+  CONST 0
   FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
   TYPE com/lattice/LatticeObject
   INVOKE com/lattice/LatticeNative.getHandle(Lcom/lattice/LatticeObject;)J

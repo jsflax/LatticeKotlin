@@ -32,7 +32,7 @@ get_latticeHandle()J
 
 get_latticeSchema()Ljava/util/List;
   FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
-  CONST "name:2:0:0:,tags:2:0:0:,counts:2:0:0:"
+  CONST "name:2:0:0::0,tags:2:0:0::0,counts:2:0:0::0"
   INVOKE com/lattice/LatticeNative.buildSchemaFromString(Ljava/lang/String;)Ljava/util/List;
 
 get_latticeTableName()Ljava/lang/String;

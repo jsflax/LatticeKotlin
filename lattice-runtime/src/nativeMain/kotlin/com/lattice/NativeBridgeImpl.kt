@@ -83,6 +83,7 @@ internal actual object NativeBridge {
         propNullable: BooleanArray,
         propTargetTables: Array<String?>,
         propLinkTables: Array<String?>,
+        propFlags: IntArray,
         syncEndpoint: String?,
         authToken: String?
     ): Long = memScoped {
@@ -122,10 +123,14 @@ internal actual object NativeBridge {
                     props[p].nullable = propNullable[propIdx]
                     props[p].target_table = propTargetTables[propIdx]?.cstr?.ptr
                     props[p].link_table = propLinkTables[propIdx]?.cstr?.ptr
-                    // New fields default to false/null - will be set by extended API
-                    props[p].is_indexed = false
-                    props[p].is_unique = false
-                    props[p].is_full_text = false
+                    // This is the path that decides table DDL, so it is where
+                    // @Unique has to arrive for CREATE UNIQUE INDEX to be emitted.
+                    // It previously hard-coded false, which is why the annotation
+                    // was a silent no-op even though LatticeCore implements it.
+                    val flags = propFlags.getOrElse(propIdx) { 0 }
+                    props[p].is_indexed = flags and 2 != 0
+                    props[p].is_unique = flags and 1 != 0
+                    props[p].is_full_text = flags and 4 != 0
                     props[p].is_vector = false
                     props[p].is_geo_bounds = false
                     props[p].column_name = null
@@ -432,9 +437,9 @@ internal actual object NativeBridge {
                 props[i].nullable = e["nullable"]?.toBooleanStrictOrNull() ?: false
                 props[i].target_table = e["target_table"]?.takeIf { it.isNotEmpty() && it != "null" }?.cstr?.ptr
                 props[i].link_table = e["link_table"]?.takeIf { it.isNotEmpty() && it != "null" }?.cstr?.ptr
-                props[i].is_indexed = false
-                props[i].is_unique = false
-                props[i].is_full_text = false
+                props[i].is_indexed = e["is_indexed"]?.toBooleanStrictOrNull() ?: false
+                props[i].is_unique = e["is_unique"]?.toBooleanStrictOrNull() ?: false
+                props[i].is_full_text = e["is_full_text"]?.toBooleanStrictOrNull() ?: false
                 props[i].is_vector = false
                 props[i].is_geo_bounds = false
                 props[i].column_name = null

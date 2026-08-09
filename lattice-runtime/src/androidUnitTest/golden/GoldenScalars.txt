@@ -98,7 +98,7 @@ get_latticeHandle()J
 
 get_latticeSchema()Ljava/util/List;
   FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
-  CONST "string:2:0:0:,stringOpt:2:0:1:,bool:0:0:0:,boolOpt:0:0:1:,int:0:0:0:,intOpt:0:0:1:,long:0:0:0:,longOpt:0:0:1:,float:1:0:0:,floatOpt:1:0:1:,double:1:0:0:,doubleOpt:1:0:1:"
+  CONST "string:2:0:0::0,stringOpt:2:0:1::0,bool:0:0:0::0,boolOpt:0:0:1::0,int:0:0:0::0,intOpt:0:0:1::0,long:0:0:0::0,longOpt:0:0:1::0,float:1:0:0::0,floatOpt:1:0:1::0,double:1:0:0::0,doubleOpt:1:0:1::0"
   INVOKE com/lattice/LatticeNative.buildSchemaFromString(Ljava/lang/String;)Ljava/util/List;
 
 get_latticeTableName()Ljava/lang/String;

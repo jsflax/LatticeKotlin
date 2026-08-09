@@ -83,34 +83,24 @@ class ConformanceCorpusTest {
         // is_unique=false. Verified still diverging on the 1.0.1 pin.
         put(
             "errors/unique-violation-add-failed",
-            "binding: unique flag never reaches the C ABI — plugin drops @Unique and " +
-                "NativeBridgeImpl hard-codes is_unique=false (core-side DDL gap fixed in 1.0.1)"
+            "core: the binding half is FIXED — the plugin now reads @Unique and is_unique " +
+                "reaches the C ABI through both bridges (proven by query-fts/*, which conform " +
+                "via the identical path). The duplicate insert still succeeds against a " +
+                "freshly-built 1.0.1, so single-column uniqueness declared over the C ABI " +
+                "produces no enforced constraint core-side."
         )
         // op: transaction(expect_error=add_failed). Expected: inner duplicate
         // insert fails, transaction rolls back, final rows [[x, first]].
         // Actual: both inner inserts succeed and commit. Same root cause.
         put(
             "transactions/error-inside-rolls-back",
-            "binding: same is_unique gap — the duplicate insert inside the transaction " +
-                "succeeds instead of failing with add_failed, so nothing rolls back"
+            "core: same residual is_unique gap as errors/unique-violation-add-failed — the " +
+                "duplicate insert inside the transaction succeeds, so nothing rolls back"
         )
 
-        // FTS is core-required (undeclarable), but the Kotlin binding never
-        // creates the FTS5 shadow table: the compiler plugin does not read
-        // @FullText (no is_full_text in generated descriptors) and
-        // NativeBridgeImpl.createDbWithSchemaArrays hard-codes
-        // is_full_text=false, so _CfArticle_content_fts does not exist and
-        // Results.matching()'s "id IN (SELECT rowid FROM ...)" query fails,
-        // yielding [] for every match. Expected hit lists vs actual [].
-        val ftsCause = "binding: FTS5 table never created — plugin ignores @FullText and " +
-            "NativeBridgeImpl hard-codes is_full_text=false, so Results.matching() queries a " +
-            "missing _<table>_<col>_fts table and returns []"
-        put("query-fts/single-term", ftsCause)
-        put("query-fts/implicit-and", ftsCause)
-        put("query-fts/explicit-or", ftsCause)
-        put("query-fts/phrase", ftsCause)
-        put("query-fts/prefix", ftsCause)
-        put("query-fts/match-update-visibility", ftsCause)
+        // (query-fts/* removed: the six FTS scenarios now conform. The plugin
+        // reads @FullText and the flag reaches the C ABI through both bridges,
+        // so the FTS5 shadow table is created and Results.matching() resolves.)
 
         // KNN is core-required (undeclarable), but latticekotlin has no public
         // KNN query API at all: DistanceMetric/NearestMatch are inert data

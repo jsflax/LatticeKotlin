@@ -141,5 +141,16 @@ annotation class Property(
 @Target(AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.BINARY)
 annotation class LatticeEnum(
-    val storeAsOrdinal: Boolean = false
+    val storeAsOrdinal: Boolean = false,
+    /**
+     * Name of the entry to fall back to when the stored value matches no entry —
+     * a value written by a newer client, or one removed from the enum since.
+     * Empty means the first declared entry.
+     *
+     * Without a fallback the generated getter calls `valueOf`, which THROWS on an
+     * unknown value; Swift's Lattice falls back instead. Reading a row therefore
+     * has to be able to fail, which is why consumers reach for raw `String`
+     * columns instead of this annotation.
+     */
+    val defaultValue: String = ""
 )

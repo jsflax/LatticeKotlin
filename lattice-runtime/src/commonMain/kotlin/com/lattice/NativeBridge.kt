@@ -48,6 +48,7 @@ internal expect object NativeBridge {
         propNullable: BooleanArray,
         propTargetTables: Array<String?>,
         propLinkTables: Array<String?>,
+        propFlags: IntArray,
         syncEndpoint: String?,
         authToken: String?
     ): Long
