@@ -1,10 +1,11 @@
+import com.vanniktech.maven.publish.SonatypeHost
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
 
 plugins {
     kotlin("multiplatform")
     kotlin("plugin.serialization") version "2.0.21"
     id("com.android.library")
-    `maven-publish`
+    id("com.vanniktech.maven.publish")
 }
 
 // LatticeCore is a git submodule pinned to a release tag.
@@ -17,6 +18,7 @@ val compilerPluginProject = project(":lattice-compiler-plugin")
 kotlin {
     // Android target (JVM-based, produces AAR)
     androidTarget {
+        publishLibraryVariants("release")
         compilations.all {
             kotlinOptions {
                 jvmTarget = "17"
@@ -221,9 +223,32 @@ afterEvaluate {
     }
 }
 
-publishing {
-    publications.withType<MavenPublication> {
-        artifactId = "lattice-runtime-${name}"
+mavenPublishing {
+    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
+    signAllPublications()
+    coordinates("io.github.jsflax", "lattice-runtime", version.toString())
+    pom {
+        name.set("Lattice Runtime")
+        description.set("Kotlin Multiplatform runtime for Lattice — an embedded reactive object store with sync.")
+        url.set("https://github.com/jsflax/LatticeKotlin")
+        licenses {
+            license {
+                name.set("MIT License")
+                url.set("https://opensource.org/licenses/MIT")
+            }
+        }
+        developers {
+            developer {
+                id.set("jsflax")
+                name.set("Jason Flax")
+                url.set("https://github.com/jsflax")
+            }
+        }
+        scm {
+            url.set("https://github.com/jsflax/LatticeKotlin")
+            connection.set("scm:git:git://github.com/jsflax/LatticeKotlin.git")
+            developerConnection.set("scm:git:ssh://git@github.com/jsflax/LatticeKotlin.git")
+        }
     }
 }
 

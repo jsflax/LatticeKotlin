@@ -17,7 +17,7 @@ class LatticeGradlePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin {
         project.afterEvaluate {
             project.dependencies.add(
                 "implementation",
-                "com.lattice:lattice-runtime:${LatticeVersion.VERSION}"
+                "io.github.jsflax:lattice-runtime:${LatticeVersion.VERSION}"
             )
         }
     }
@@ -43,5 +43,5 @@ open class LatticeExtension {
 }
 
 object LatticeVersion {
-    const val VERSION = "0.10.0-SNAPSHOT"
+    const val VERSION = "1.0.0"
 }

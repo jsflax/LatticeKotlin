@@ -1,7 +1,9 @@
+import com.vanniktech.maven.publish.SonatypeHost
+
 plugins {
     kotlin("jvm")
     kotlin("kapt")
-    `maven-publish`
+    id("com.vanniktech.maven.publish")
 }
 
 dependencies {
@@ -19,11 +21,31 @@ tasks.test {
     useJUnitPlatform()
 }
 
-publishing {
-    publications {
-        create<MavenPublication>("maven") {
-            from(components["java"])
-            artifactId = "lattice-compiler-plugin"
+mavenPublishing {
+    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
+    signAllPublications()
+    coordinates("io.github.jsflax", "lattice-compiler-plugin", version.toString())
+    pom {
+        name.set("Lattice Compiler Plugin")
+        description.set("K2 compiler plugin (FIR/IR) for Lattice @Model transforms; apply via kotlinCompilerPluginClasspath.")
+        url.set("https://github.com/jsflax/LatticeKotlin")
+        licenses {
+            license {
+                name.set("MIT License")
+                url.set("https://opensource.org/licenses/MIT")
+            }
+        }
+        developers {
+            developer {
+                id.set("jsflax")
+                name.set("Jason Flax")
+                url.set("https://github.com/jsflax")
+            }
+        }
+        scm {
+            url.set("https://github.com/jsflax/LatticeKotlin")
+            connection.set("scm:git:git://github.com/jsflax/LatticeKotlin.git")
+            developerConnection.set("scm:git:ssh://git@github.com/jsflax/LatticeKotlin.git")
         }
     }
 }
