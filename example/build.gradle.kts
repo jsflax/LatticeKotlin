@@ -31,8 +31,18 @@ kotlin {
 // Apply the compiler plugin to Kotlin Native compilations
 tasks.withType<KotlinCompilationTask<*>>().configureEach {
     dependsOn(":lattice-compiler-plugin:jar")
+    // Version-derived: a hardcoded name survives a version bump as a path to a
+    // MISSING jar, which silently disables the @Model transform instead of failing.
+    val pluginJar = project(":lattice-compiler-plugin").layout.buildDirectory
+        .file("libs/lattice-compiler-plugin-${project.version}.jar")
     compilerOptions {
-        val pluginJar = project(":lattice-compiler-plugin").layout.buildDirectory.file("libs/lattice-compiler-plugin-1.0.0.jar")
         freeCompilerArgs.add("-Xplugin=${pluginJar.get().asFile.absolutePath}")
+    }
+    inputs.file(pluginJar)
+        .withPropertyName("latticeCompilerPluginJar")
+        .withPathSensitivity(PathSensitivity.NONE)
+    doFirst {
+        val jar = pluginJar.get().asFile
+        check(jar.exists()) { "Lattice compiler plugin jar missing: $jar — the @Model transform would silently no-op." }
     }
 }

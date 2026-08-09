@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "io.github.jsflax"
-version = "1.0.0"
+version = "1.1.0"
 
 subprojects {
     group = rootProject.group

@@ -58,12 +58,20 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 }
 
-// Apply the Lattice compiler plugin
-val compilerPluginJar = rootProject.file("../../lattice-compiler-plugin/build/libs/lattice-compiler-plugin-1.0.0.jar")
+// Apply the Lattice compiler plugin.
+// Resolved by glob rather than a hardcoded version: this is a composite build, so
+// a version bump in latticekotlin would otherwise leave -Xplugin pointing at a
+// MISSING jar, which silently disables the @Model transform instead of failing.
+val compilerPluginLibs = rootProject.file("../../lattice-compiler-plugin/build/libs")
+val compilerPluginJar: File
+    get() = compilerPluginLibs.listFiles()
+        ?.filter { it.name.startsWith("lattice-compiler-plugin-") && it.name.endsWith(".jar") }
+        ?.maxByOrNull { it.lastModified() }
+        ?: error("No lattice-compiler-plugin jar in $compilerPluginLibs — run :lattice-compiler-plugin:jar")
 
 tasks.withType<KotlinCompilationTask<*>>().configureEach {
     compilerOptions {
-        freeCompilerArgs.add("-Xplugin=${compilerPluginJar.absolutePath}")
+        freeCompilerArgs.add(providers.provider { "-Xplugin=${compilerPluginJar.absolutePath}" }.get())
     }
 }
 
