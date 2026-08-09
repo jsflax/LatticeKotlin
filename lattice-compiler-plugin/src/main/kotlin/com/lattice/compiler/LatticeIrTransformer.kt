@@ -19,6 +19,7 @@ import org.jetbrains.kotlin.ir.symbols.UnsafeDuringIrConstructionAPI
 import org.jetbrains.kotlin.ir.symbols.impl.*
 import org.jetbrains.kotlin.ir.declarations.impl.IrAnonymousInitializerImpl
 import org.jetbrains.kotlin.ir.types.*
+import org.jetbrains.kotlin.ir.types.isNullable
 import org.jetbrains.kotlin.ir.util.*
 import org.jetbrains.kotlin.name.CallableId
 import org.jetbrains.kotlin.name.ClassId
@@ -477,7 +478,7 @@ class LatticeIrTransformer(
 
         // Implement setter body for FIR-generated property
         property.setter?.let { setter ->
-            val valueParam = setter.valueParameters.firstOrNull()
+            val valueParam = setter.regularParameters.firstOrNull()
             if (valueParam != null) {
                 setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {
                     +irSetField(irGet(setter.dispatchReceiverParameter!!), field, irGet(valueParam))
@@ -762,7 +763,7 @@ class LatticeIrTransformer(
         userProperties: List<IrProperty>,
         latticeNativeSymbol: IrClassSymbol
     ) {
-        val nativeHandleParam = function.valueParameters.firstOrNull() ?: return
+        val nativeHandleParam = function.regularParameters.firstOrNull() ?: return
 
         function.body = DeclarationIrBuilder(pluginContext, function.symbol).irBlockBody {
             val thisReceiver = function.dispatchReceiverParameter!!
@@ -1296,7 +1297,7 @@ class LatticeIrTransformer(
             return
         }
 
-        val valueParam = setter.valueParameters.firstOrNull() ?: return
+        val valueParam = setter.regularParameters.firstOrNull() ?: return
 
         // Always delegate to C++ - all storage is in C++ object
         setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {
@@ -1420,7 +1421,7 @@ class LatticeIrTransformer(
             return
         }
 
-        val valueParam = setter.valueParameters.firstOrNull() ?: return
+        val valueParam = setter.regularParameters.firstOrNull() ?: return
 
         setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {
             val thisReceiver = setter.dispatchReceiverParameter!!
@@ -1626,7 +1627,7 @@ class LatticeIrTransformer(
     ) {
         // For link lists, setting is handled by modifying the list directly
         // The setter is a no-op or could copy elements from the new list
-        val valueParam = setter.valueParameters.firstOrNull() ?: return
+        val valueParam = setter.regularParameters.firstOrNull() ?: return
 
         setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {
             // No-op for now - list modifications happen through the list object
@@ -1754,7 +1755,7 @@ class LatticeIrTransformer(
     ) {
         // For virtual lists, setting is handled by modifying the list directly
         // The setter is a no-op
-        val valueParam = setter.valueParameters.firstOrNull() ?: return
+        val valueParam = setter.regularParameters.firstOrNull() ?: return
 
         setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {
             // No-op — list modifications happen through the list object
@@ -1848,7 +1849,7 @@ class LatticeIrTransformer(
             return
         }
 
-        val valueParam = setter.valueParameters.firstOrNull() ?: return
+        val valueParam = setter.regularParameters.firstOrNull() ?: return
         val baseType = if (propertyType.isNullable()) propertyType.makeNotNull() else propertyType
 
         setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {
@@ -1965,7 +1966,7 @@ class LatticeIrTransformer(
         }
 
         val nativeSetter = findLatticeNativeFunction(latticeNativeSymbol, setterName) ?: return
-        val valueParam = setter.valueParameters.firstOrNull() ?: return
+        val valueParam = setter.regularParameters.firstOrNull() ?: return
 
         setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {
             val thisReceiver = setter.dispatchReceiverParameter!!
@@ -2013,7 +2014,7 @@ class LatticeIrTransformer(
 
         // Find the valueOf function or entries property
         val valueOfFn = enumClass.functions.find {
-            it.name.asString() == "valueOf" && it.valueParameters.size == 1
+            it.name.asString() == "valueOf" && it.regularParameters.size == 1
         }
 
         // Find entries property (Kotlin 1.9+)
@@ -2164,7 +2165,7 @@ class LatticeIrTransformer(
             return
         }
 
-        val valueParam = setter.valueParameters.firstOrNull() ?: return
+        val valueParam = setter.regularParameters.firstOrNull() ?: return
 
         // Find name and ordinal properties on the enum
         val nameProp = enumClass.properties.find { it.name.asString() == "name" }
@@ -2394,9 +2395,11 @@ class LatticeIrTransformer(
             ann.type.classOrNull?.owner?.fqNameWhenAvailable == latticeEnumAnnotationFqn
         } ?: return false
 
-        // Get the storeAsOrdinal parameter (first parameter)
-        val arg = annotation.getValueArgument(0)
-        return (arg as? IrConst<*>)?.value as? Boolean ?: false
+        // Get the storeAsOrdinal parameter. In 2.4 `getValueArgument` is keyed by
+        // Name, not index — and an annotation argument left at its default is
+        // simply ABSENT, so a missing entry means `false` (the declared default).
+        val arg = annotation.getValueArgument(Name.identifier("storeAsOrdinal"))
+        return (arg as? IrConst)?.value as? Boolean ?: false
     }
 
     private fun findLatticeNativeFunction(latticeNativeSymbol: IrClassSymbol, name: String): IrSimpleFunctionSymbol? {
@@ -2427,4 +2430,39 @@ private fun IrProperty.hasAnnotation(fqName: FqName): Boolean {
     return annotations.any { annotation ->
         annotation.type.classOrNull?.owner?.fqNameWhenAvailable == fqName
     }
+}
+
+/**
+ * The user-declared value parameters, excluding every receiver.
+ *
+ * Kotlin 2.2 (KT-68003) merged receivers into `IrFunction.parameters`, so on a
+ * property setter `parameters.first()` is the DISPATCH RECEIVER, not the value.
+ * A generated setter built from that stores `this` instead of `value` — and
+ * compiles clean, which is why this needs a named helper rather than a rename.
+ *
+ * `nonDispatchParameters` is also wrong here: it keeps context parameters, which
+ * Kotlin 2.2 added and which sort ahead of regular ones. Filter on kind.
+ */
+private val IrFunction.regularParameters: List<IrValueParameter>
+    get() = parameters.filter { it.kind == IrParameterKind.Regular }
+
+/**
+ * Compatibility shim for the `putValueArgument(index, value)` removed in Kotlin
+ * 2.2 (KT-68003), which merged receivers into a single `arguments` list.
+ *
+ * The mechanical migration is `arguments[index] = value`, but that index is NOT
+ * the old one: it is offset by however many receivers and context parameters the
+ * CALLEE happens to declare. Getting it wrong reorders arguments silently — the
+ * types usually still line up, so it compiles and ships.
+ *
+ * Resolving the parameter from the callee's own list instead makes every call
+ * site correct by construction, and preserves the original meaning exactly:
+ * `index` is the i-th user-declared value parameter, receivers excluded.
+ */
+private fun IrFunctionAccessExpression.putValueArgument(index: Int, valueArgument: IrExpression) {
+    val regular = symbol.owner.parameters.filter { it.kind == IrParameterKind.Regular }
+    require(index in regular.indices) {
+        "putValueArgument($index) on ${symbol.owner.name}, which declares ${regular.size} value parameter(s)"
+    }
+    arguments[regular[index]] = valueArgument
 }

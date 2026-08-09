@@ -3,8 +3,8 @@ package com.lattice.compiler
 import com.google.auto.service.AutoService
 import com.lattice.compiler.fir.LatticeFirExtensionRegistrar
 import org.jetbrains.kotlin.backend.common.extensions.IrGenerationExtension
-import org.jetbrains.kotlin.cli.common.CLIConfigurationKeys
 import org.jetbrains.kotlin.cli.common.messages.MessageCollector
+import org.jetbrains.kotlin.config.CommonConfigurationKeys
 import org.jetbrains.kotlin.compiler.plugin.CompilerPluginRegistrar
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import org.jetbrains.kotlin.config.CompilerConfiguration
@@ -14,11 +14,15 @@ import org.jetbrains.kotlin.fir.extensions.FirExtensionRegistrarAdapter
 @AutoService(CompilerPluginRegistrar::class)
 class LatticeCompilerPluginRegistrar : CompilerPluginRegistrar() {
 
+    // Abstract in 2.4: the compiler uses it to key plugin state, and it must be
+    // stable across releases. Matches the id the Gradle plugin passes.
+    override val pluginId: String = "com.lattice.compiler"
+
     override val supportsK2: Boolean = true
 
     override fun ExtensionStorage.registerExtensions(configuration: CompilerConfiguration) {
         val messageCollector = configuration.get(
-            CLIConfigurationKeys.MESSAGE_COLLECTOR_KEY,
+            CommonConfigurationKeys.MESSAGE_COLLECTOR_KEY,
             MessageCollector.NONE
         )
 

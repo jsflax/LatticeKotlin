@@ -9,11 +9,11 @@ getEndTime()Lkotlinx/datetime/Instant;
 
 getGlobalId()Ljava/lang/String;
   LOAD 0
-  INVOKE com/lattice/LatticeObject$DefaultImpls.getGlobalId(Lcom/lattice/LatticeObject;)Ljava/lang/String;
+  INVOKE com/lattice/LatticeObject.getGlobalId()Ljava/lang/String;
 
 getId()J
   LOAD 0
-  INVOKE com/lattice/LatticeObject$DefaultImpls.getId(Lcom/lattice/LatticeObject;)J
+  INVOKE com/lattice/LatticeObject.getId()J
 
 getStartTime()Lkotlinx/datetime/Instant;
   FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;

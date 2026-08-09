@@ -2,11 +2,11 @@
 
 getGlobalId()Ljava/lang/String;
   LOAD 0
-  INVOKE com/lattice/LatticeObject$DefaultImpls.getGlobalId(Lcom/lattice/LatticeObject;)Ljava/lang/String;
+  INVOKE com/lattice/LatticeObject.getGlobalId()Ljava/lang/String;
 
 getId()J
   LOAD 0
-  INVOKE com/lattice/LatticeObject$DefaultImpls.getId(Lcom/lattice/LatticeObject;)J
+  INVOKE com/lattice/LatticeObject.getId()J
 
 getName()Ljava/lang/String;
   FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;

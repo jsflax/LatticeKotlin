@@ -7,8 +7,9 @@ import org.jetbrains.kotlin.fir.resolve.providers.symbolProvider
 import org.jetbrains.kotlin.fir.symbols.impl.FirRegularClassSymbol
 import org.jetbrains.kotlin.fir.types.FirResolvedTypeRef
 import org.jetbrains.kotlin.fir.types.FirUserTypeRef
-import org.jetbrains.kotlin.fir.types.builder.buildResolvedTypeRef
+import org.jetbrains.kotlin.fir.types.ConeKotlinType
 import org.jetbrains.kotlin.fir.types.classId
+import org.jetbrains.kotlin.fir.types.coneType
 import org.jetbrains.kotlin.fir.types.constructClassLikeType
 import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.FqName
@@ -46,10 +47,10 @@ class LatticeFirSupertypeGenerator(session: FirSession) : FirSupertypeGeneration
         classLikeDeclaration: FirClassLikeDeclaration,
         resolvedSupertypes: List<FirResolvedTypeRef>,
         typeResolver: TypeResolveService
-    ): List<FirResolvedTypeRef> {
+    ): List<ConeKotlinType> {
         // Check if LatticeObject is already a supertype
         val alreadyHasLatticeObject = resolvedSupertypes.any { typeRef ->
-            typeRef.type.classId == LATTICE_OBJECT
+            typeRef.coneType.classId == LATTICE_OBJECT
         }
 
         if (alreadyHasLatticeObject) {
@@ -64,13 +65,9 @@ class LatticeFirSupertypeGenerator(session: FirSession) : FirSupertypeGeneration
         // Create a ConeKotlinType for LatticeObject
         val latticeObjectType = LATTICE_OBJECT.constructClassLikeType(
             typeArguments = emptyArray(),
-            isNullable = false
+            isMarkedNullable = false
         )
 
-        return listOf(
-            buildResolvedTypeRef {
-                type = latticeObjectType
-            }
-        )
+        return listOf(latticeObjectType)
     }
 }

@@ -12,6 +12,7 @@ import org.jetbrains.kotlin.fir.symbols.SymbolInternals
 import org.jetbrains.kotlin.fir.symbols.impl.FirClassSymbol
 import org.jetbrains.kotlin.fir.symbols.impl.FirPropertySymbol
 import org.jetbrains.kotlin.fir.types.FirUserTypeRef
+import org.jetbrains.kotlin.fir.types.coneType
 import org.jetbrains.kotlin.fir.types.constructClassLikeType
 import org.jetbrains.kotlin.name.CallableId
 import org.jetbrains.kotlin.name.ClassId
@@ -122,9 +123,9 @@ class LatticeFirDeclarationGenerator(session: FirSession) : FirDeclarationGenera
             owner = owner,
             key = Key,
             name = COPY_TO_NATIVE,
-            returnType = session.builtinTypes.unitType.type
+            returnType = session.builtinTypes.unitType.coneType
         ) {
-            valueParameter(Name.identifier("nativeHandle"), session.builtinTypes.longType.type)
+            valueParameter(Name.identifier("nativeHandle"), session.builtinTypes.longType.coneType)
         }.symbol
     }
 
@@ -136,7 +137,7 @@ class LatticeFirDeclarationGenerator(session: FirSession) : FirDeclarationGenera
             owner = owner,
             key = Key,
             name = LATTICE_HANDLE,
-            returnType = session.builtinTypes.longType.type,
+            returnType = session.builtinTypes.longType.coneType,
             isVal = false,  // var
             hasBackingField = true
         ).symbol
@@ -150,7 +151,7 @@ class LatticeFirDeclarationGenerator(session: FirSession) : FirDeclarationGenera
             owner = owner,
             key = Key,
             name = LATTICE_TABLE_NAME,
-            returnType = session.builtinTypes.stringType.type,
+            returnType = session.builtinTypes.stringType.coneType,
             isVal = true,
             hasBackingField = false
         ).symbol
@@ -163,11 +164,11 @@ class LatticeFirDeclarationGenerator(session: FirSession) : FirDeclarationGenera
         // Create the type: List<LatticePropertyDescriptor>
         val descriptorType = LATTICE_PROPERTY_DESCRIPTOR.constructClassLikeType(
             typeArguments = emptyArray(),
-            isNullable = false
+            isMarkedNullable = false
         )
         val listType = StandardClassIds.List.constructClassLikeType(
             typeArguments = arrayOf(descriptorType),
-            isNullable = false
+            isMarkedNullable = false
         )
 
         return createMemberProperty(
