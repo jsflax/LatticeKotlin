@@ -1,0 +1,104 @@
+# codegen shape: com.lattice.codegen.GoldenConstraints
+
+getBio$annotations()V
+
+getBio()Ljava/lang/String;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenConstraints._lattice_handle_field_GoldenConstraints:J
+  CONST "bio"
+  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+
+getCity$annotations()V
+
+getCity()Ljava/lang/String;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenConstraints._lattice_handle_field_GoldenConstraints:J
+  CONST "city"
+  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+
+getEmail$annotations()V
+
+getEmail()Ljava/lang/String;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenConstraints._lattice_handle_field_GoldenConstraints:J
+  CONST "email"
+  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+
+getGlobalId()Ljava/lang/String;
+  LOAD 0
+  INVOKE com/lattice/LatticeObject.getGlobalId()Ljava/lang/String;
+
+getId()J
+  LOAD 0
+  INVOKE com/lattice/LatticeObject.getId()J
+
+getPlain()Ljava/lang/String;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenConstraints._lattice_handle_field_GoldenConstraints:J
+  CONST "plain"
+  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+
+get_latticeHandle()J
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenConstraints._lattice_handle_field_GoldenConstraints:J
+
+get_latticeSchema()Ljava/util/List;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  CONST "email:2:0:0::1,city:2:0:0::2,bio:2:0:0::4,plain:2:0:0::0"
+  INVOKE com/lattice/LatticeNative.buildSchemaFromString(Ljava/lang/String;)Ljava/util/List;
+
+get_latticeTableName()Ljava/lang/String;
+  CONST "GoldenConstraints"
+
+setBio(Ljava/lang/String;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenConstraints._lattice_handle_field_GoldenConstraints:J
+  CONST "bio"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+setCity(Ljava/lang/String;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenConstraints._lattice_handle_field_GoldenConstraints:J
+  CONST "city"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+setEmail(Ljava/lang/String;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenConstraints._lattice_handle_field_GoldenConstraints:J
+  CONST "email"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+setPlain(Ljava/lang/String;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenConstraints._lattice_handle_field_GoldenConstraints:J
+  CONST "plain"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+set_latticeHandle(J)V
+  LOAD 0
+  LOAD 1
+  FIELD com/lattice/codegen/GoldenConstraints._lattice_handle_field_GoldenConstraints:J

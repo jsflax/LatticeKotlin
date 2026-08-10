@@ -241,6 +241,8 @@ class GeneratedAccessorGoldenTest {
             GoldenLinkTarget::class.java,
             GoldenCollections::class.java,
             GoldenEnums::class.java,
+            GoldenConstraints::class.java,
+            GoldenVirtuals::class.java,
         )
     }
 }

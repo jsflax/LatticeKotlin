@@ -5,7 +5,10 @@ getAddress()Lcom/lattice/codegen/GoldenAddress;
   LOAD 0
   FIELD com/lattice/codegen/GoldenEmbeds._lattice_handle_field_GoldenEmbeds:J
   CONST "address"
-  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+  CONST Lcom/lattice/codegen/GoldenAddress;
+  INVOKE kotlin/jvm/internal/Reflection.getOrCreateKotlinClass(Ljava/lang/Class;)Lkotlin/reflect/KClass;
+  CONST 1
+  INVOKE com/lattice/LatticeNative.getEmbedded(JLjava/lang/String;Lkotlin/reflect/KClass;Z)Ljava/lang/Object;
   TYPE com/lattice/codegen/GoldenAddress
 
 getGlobalId()Ljava/lang/String;
@@ -28,7 +31,10 @@ getWorkAddress()Lcom/lattice/codegen/GoldenAddress;
   LOAD 0
   FIELD com/lattice/codegen/GoldenEmbeds._lattice_handle_field_GoldenEmbeds:J
   CONST "workAddress"
-  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+  CONST Lcom/lattice/codegen/GoldenAddress;
+  INVOKE kotlin/jvm/internal/Reflection.getOrCreateKotlinClass(Ljava/lang/Class;)Lkotlin/reflect/KClass;
+  CONST 0
+  INVOKE com/lattice/LatticeNative.getEmbedded(JLjava/lang/String;Lkotlin/reflect/KClass;Z)Ljava/lang/Object;
   TYPE com/lattice/codegen/GoldenAddress
 
 get_latticeHandle()J
@@ -52,8 +58,9 @@ setAddress(Lcom/lattice/codegen/GoldenAddress;)V
   FIELD com/lattice/codegen/GoldenEmbeds._lattice_handle_field_GoldenEmbeds:J
   CONST "address"
   LOAD 1
-  TYPE java/lang/String
-  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+  CONST Lcom/lattice/codegen/GoldenAddress;
+  INVOKE kotlin/jvm/internal/Reflection.getOrCreateKotlinClass(Ljava/lang/Class;)Lkotlin/reflect/KClass;
+  INVOKE com/lattice/LatticeNative.setEmbedded(JLjava/lang/String;Ljava/lang/Object;Lkotlin/reflect/KClass;)V
 
 setName(Ljava/lang/String;)V
   LOAD 1
@@ -72,8 +79,9 @@ setWorkAddress(Lcom/lattice/codegen/GoldenAddress;)V
   FIELD com/lattice/codegen/GoldenEmbeds._lattice_handle_field_GoldenEmbeds:J
   CONST "workAddress"
   LOAD 1
-  TYPE java/lang/String
-  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+  CONST Lcom/lattice/codegen/GoldenAddress;
+  INVOKE kotlin/jvm/internal/Reflection.getOrCreateKotlinClass(Ljava/lang/Class;)Lkotlin/reflect/KClass;
+  INVOKE com/lattice/LatticeNative.setEmbedded(JLjava/lang/String;Ljava/lang/Object;Lkotlin/reflect/KClass;)V
 
 set_latticeHandle(J)V
   LOAD 0

@@ -1,10 +1,17 @@
 package com.lattice.codegen
 
+import com.lattice.Embedded
+import com.lattice.FloatVector
+import com.lattice.FullText
+import com.lattice.Indexed
 import com.lattice.LatticeEmbedded
+import com.lattice.LatticeEnum
 import com.lattice.LatticeList
 import com.lattice.Link
-import com.lattice.LatticeEnum
 import com.lattice.Model
+import com.lattice.Unique
+import com.lattice.VirtualList
+import com.lattice.VirtualModel
 import kotlinx.datetime.Instant
 import kotlinx.serialization.Serializable
 import kotlin.uuid.ExperimentalUuidApi
@@ -70,6 +77,13 @@ class GoldenBinary {
     var thumbnail: ByteArray? = null
 }
 
+// @Embedded on the CLASS is REQUIRED: the transformer keys on the annotation on
+// the property's type, not the LatticeEmbedded supertype. Without it embedded
+// properties fall into the scalar fallback (getString + CHECKCAST — a guaranteed
+// CCE on JVM), which is exactly what this fixture silently pinned before the
+// annotation was added, leaving transformEmbeddedGetter/Setter with zero golden
+// coverage across the 2.4 migration.
+@Embedded
 @Serializable
 data class GoldenAddress(
     val street: String = "",
@@ -114,6 +128,43 @@ enum class GoldenPriority { LOW, MEDIUM, HIGH }
 
 @LatticeEnum(storeAsOrdinal = true)
 enum class GoldenStatus { PENDING, ACTIVE, DONE }
+
+/**
+ * Constraint annotations — pins NONZERO flag bits in the _latticeSchema golden
+ * (unique=1, indexed=2, full-text=4). Every other fixture emits ':0', so an
+ * always-zero regression in the flags emission would pass every golden but
+ * this one.
+ */
+@Model
+class GoldenConstraints {
+    @Unique
+    var email: String = ""
+
+    @Indexed
+    var city: String = ""
+
+    @FullText
+    var bio: String = ""
+
+    var plain: String = ""
+}
+
+/** Polymorphic supertype for the VirtualList fixture. */
+interface GoldenSearchable : VirtualModel
+
+@Model
+class GoldenVirtuals {
+    var name: String = ""
+
+    // VirtualList is detected by TYPE NAME in the transformer; this is the only
+    // fixture in either suite that runs a VirtualList property through codegen
+    // (the native VirtualListTests exercise the container API, never a
+    // transformed property).
+    var results: VirtualList<GoldenSearchable> = VirtualList()
+
+    var vector: FloatVector = FloatVector()
+    var optionalVector: FloatVector? = null
+}
 
 /** Explicit fallback entry, rather than the first-declared default. */
 @LatticeEnum(defaultValue = "TRIAGE")

@@ -1,5 +1,70 @@
 # Changelog
 
+## 1.1.0 — 2026-08-09
+
+### Breaking
+
+- **Kotlin 2.4.10 required.** The compiler plugin is built against 2.4.10
+  compiler APIs; a 2.0.x compiler fails to load it with
+  `NoClassDefFoundError: ExtensionPointDescriptor`. Bump your Kotlin plugin
+  and the `lattice-*` pins together.
+
+### ⚠️ Upgrade hazard: `@Unique` over existing duplicate data
+
+- `@Unique` / `@Indexed` / `@FullText` were declared but **silently inert**
+  in 1.0.0 — the compiler plugin never read them. In 1.1.0 they are emitted
+  end-to-end and **enforced** (verified by conformance: the duplicate insert
+  fails and the enclosing transaction rolls back).
+- Because enforcement is new, a model that gains — or already carries —
+  `@Unique` on a column containing duplicate rows triggers LatticeCore's
+  constraint recovery on the next database open: **duplicates are deleted,
+  keeping only the newest row per value**, with only a native log warning.
+  Deduplicate (or wipe rehydratable caches) before upgrading models that may
+  hold duplicate data.
+- `@Unique(compoundedWith = [...])` and `allowsUpsert` are **not yet
+  supported** — only the single-column presence bit is emitted. Setting
+  either now produces a compiler warning instead of silently enforcing a
+  weaker constraint than declared.
+
+### Fixed
+
+- **Android: link target tables were silently dropped.** `lattice_jni.c`
+  parsed camelCase schema-JSON keys while the sole producer emits snake_case
+  (which the native bridge parses), so every `@Link`/`@LinkList`
+  `target_table` was `NULL` on Android and nowhere else. Keys are unified on
+  snake_case.
+- **`@LatticeEnum` getters no longer throw on unknown stored values.** A
+  value written by a newer client (or an entry removed since) previously
+  crashed `valueOf`; Swift falls back. Name-stored enum getters now resolve
+  through a fallback first — `@LatticeEnum(defaultValue = "...")` names the
+  entry (default: first declared); nullable properties read unknown values
+  as `null`. Note this is a behavior change: unknown values that previously
+  threw now return the fallback/`null`. (Ordinal-stored enums still trap on
+  out-of-range ordinals.)
+
+### Conformance
+
+- The six `query-fts/*` scenarios and both unique-violation scenarios left
+  the divergence ledger: FTS shadow tables are created and match, and
+  uniqueness is enforced. (The unique scenarios' residual divergence was the
+  corpus runner misclassifying insert failures — `isManaged` is true for
+  every freshly constructed object — not the SDK; the runner now classifies
+  by call site.)
+
+### Internal
+
+- Schema descriptor string gained an optional 6th field (constraint bits:
+  1 = unique, 2 = indexed, 4 = full-text); 5-field strings from older
+  plugins still parse.
+- New codegen golden harness (`androidUnitTest`): every generated accessor
+  is pinned as an opcode-shape golden compiled through the real `-Xplugin`
+  path, with the plugin jar registered as a tracked input (its contents were
+  previously invisible to Gradle, so edits could validate stale bytecode).
+  Coverage includes embedded, VirtualList, FloatVector, collections, links,
+  both enum encodings, and nonzero constraint flags.
+- Version-derived compiler-plugin jar paths everywhere; a missing jar now
+  fails loudly instead of silently disabling the transform.
+
 ## 1.0.0 — 2026-07-25
 
 ### Core

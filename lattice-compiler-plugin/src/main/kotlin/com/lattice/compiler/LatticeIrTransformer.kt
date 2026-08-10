@@ -1129,6 +1129,11 @@ class LatticeIrTransformer(
                             val flags = (if (prop.hasAnnotation(uniqueAnnotationFqn)) 1 else 0) or
                                 (if (prop.hasAnnotation(indexedAnnotationFqn)) 2 else 0) or
                                 (if (prop.hasAnnotation(fullTextAnnotationFqn)) 4 else 0)
+                            // Only single-column PRESENCE is carried. Degrading
+                            // @Unique(compoundedWith/allowsUpsert) silently would trade a
+                            // declared compound/upsert constraint for a plain single-column
+                            // one with no diagnostic — say so loudly instead.
+                            warnOnUnsupportedUniqueArgs(prop)
                             "${prop.name.asString()}:$typeOrd:$kindOrd:${if (isNullable) "1" else "0"}:$targetTable:$flags"
                         }.joinToString(",")
 
@@ -2446,6 +2451,33 @@ class LatticeIrTransformer(
         // simply ABSENT, so a missing entry means `false` (the declared default).
         val arg = annotation.getValueArgument(Name.identifier("storeAsOrdinal"))
         return (arg as? IrConst)?.value as? Boolean ?: false
+    }
+
+    /**
+     * `@Unique` support is single-column presence only: the schema-string flag
+     * bitfield has no carrier for `compoundedWith` columns or `allowsUpsert`.
+     * A model ported from Swift with either argument set would otherwise
+     * compile clean and silently enforce a WEAKER constraint than declared.
+     */
+    private fun warnOnUnsupportedUniqueArgs(prop: IrProperty) {
+        val annotation = prop.annotations.find { ann ->
+            ann.type.classOrNull?.owner?.fqNameWhenAvailable == uniqueAnnotationFqn
+        } ?: return
+        // An argument left at its default is ABSENT from the mapping (2.4 IR).
+        val hasCompound = annotation.getValueArgument(Name.identifier("compoundedWith")) != null
+        val hasUpsert = annotation.getValueArgument(Name.identifier("allowsUpsert")) != null
+        if (hasCompound || hasUpsert) {
+            val args = listOfNotNull(
+                "compoundedWith".takeIf { hasCompound },
+                "allowsUpsert".takeIf { hasUpsert },
+            ).joinToString(" and ")
+            messageCollector.report(
+                CompilerMessageSeverity.WARNING,
+                "Lattice: @Unique on '${prop.name.asString()}' sets $args, which the Kotlin " +
+                    "plugin does not support yet — only the single-column unique constraint is " +
+                    "emitted. The declared constraint is WEAKER than written."
+            )
+        }
     }
 
     /**
