@@ -9,6 +9,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -185,6 +186,115 @@ class ObserverCancelAfterCloseTest {
             threads.forEach { assertFalse("thread should have finished", it.isAlive) }
 
             tokens.forEach { assertFalse(it.isActive) }
+        }
+    }
+
+    /**
+     * observe() after close() must not touch the freed database — not even to
+     * register. It returns a token that is inactive from the start.
+     */
+    @Test
+    fun observeAfterClose_returnsInactiveToken() {
+        val lattice = newLattice()
+        lattice.close()
+
+        val token = lattice.objects(ObservedNote::class).observe { }
+        assertFalse("a token minted after close starts inactive", token.isActive)
+        token.cancel()
+        token.cancel()
+    }
+
+    /**
+     * The registration-side race, mirror image of [cancelRacingClose_doesNotCrash]:
+     * threads hammer observe() while another closes the lattice mid-stream. An
+     * observe that lost the race used to register against a database close()
+     * was freeing (the original use-after-free through the other door), and
+     * minted fresh registry state over the dead handle — poisoning a future
+     * database recycled at the same address. Now the liveness check and the
+     * JNI registration happen under the registry lock, so every observe either
+     * completes against the live database (and close then invalidates it) or
+     * sees the closed handle and registers nothing.
+     *
+     * After close wins, no observer may be left registered: every token must
+     * be inactive, and a replacement database must observe cleanly.
+     */
+    @Test
+    fun observeRacingClose_doesNotCrashOrLeakRegistrations() {
+        repeat(20) {
+            val lattice = newLattice()
+            val notes = lattice.objects(ObservedNote::class)
+
+            val tokens = Collections.synchronizedList(mutableListOf<Cancellable>())
+            val start = CountDownLatch(1)
+            val hammering = CountDownLatch(1)
+
+            val observers = (1..4).map {
+                Thread {
+                    start.await()
+                    repeat(16) { i ->
+                        tokens += notes.observe { }
+                        if (i == 0) hammering.countDown()
+                    }
+                }
+            }
+            val closer = Thread {
+                start.await()
+                // Close only once registration is provably under way, so the
+                // two sides genuinely overlap.
+                hammering.await()
+                lattice.close()
+            }
+
+            (observers + closer).forEach { it.start() }
+            start.countDown()
+            (observers + closer).forEach { it.join(TimeUnit.SECONDS.toMillis(10)) }
+            (observers + closer).forEach { assertFalse("thread should have finished", it.isAlive) }
+
+            // Whether a token registered before the close (invalidated) or
+            // after it (inert), it must be dead now, and cancelling it must
+            // stay a no-op.
+            tokens.forEach { assertFalse("no observer may survive close", it.isActive) }
+            tokens.forEach { it.cancel() }
+
+            // A replacement database — possibly allocated at the recycled
+            // native address — must start unpoisoned.
+            val replacement = newLattice()
+            val fired = CountDownLatch(1)
+            val watcher = replacement.objects(ObservedNote::class).observe { fired.countDown() }
+            replacement.add(ObservedNote().apply { text = "still alive" })
+            assertTrue("replacement lattice must observe cleanly", fired.await(5, TimeUnit.SECONDS))
+            watcher.cancel()
+            replacement.close()
+        }
+    }
+
+    /**
+     * close() racing close(): the open->closed transition happens under the
+     * registry lock, so exactly one caller tears the native database down and
+     * the others return without touching it. Double-frees here used to be
+     * possible because the guard was a plain non-volatile Boolean.
+     */
+    @Test
+    fun closeRacingClose_isSafe() {
+        repeat(20) {
+            val lattice = newLattice()
+            val token = lattice.objects(ObservedNote::class).observe { }
+
+            val start = CountDownLatch(1)
+            val threads = (1..4).map {
+                Thread {
+                    start.await()
+                    lattice.close()
+                }
+            }
+
+            threads.forEach { it.start() }
+            start.countDown()
+            threads.forEach { it.join(TimeUnit.SECONDS.toMillis(10)) }
+            threads.forEach { assertFalse("thread should have finished", it.isAlive) }
+
+            assertFalse(token.isActive)
+            token.cancel()
         }
     }
 }
