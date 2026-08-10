@@ -246,7 +246,7 @@ class Results<T : LatticeObject>(
      * token.cancel()
      * ```
      *
-     * ### Cancelling after close
+     * ### Observing around close
      *
      * Tokens may be cancelled after the lattice is closed; cancelling a token
      * whose lattice is closed is a safe no-op, and so is cancelling the same
@@ -260,10 +260,21 @@ class Results<T : LatticeObject>(
      * token.cancel()   // no-op, not a crash
      * ```
      *
+     * Calling observe() after — or concurrently with — [Lattice.close] is
+     * also safe: once the close has won, observe() registers nothing and
+     * returns a token that is inactive from the start.
+     *
+     * ### Retention
+     *
+     * The returned token (and the [callback] it carries) is strongly retained
+     * by the observer registry until it is cancelled or the lattice is
+     * closed. Garbage collection never cancels an observation — discarding
+     * the token without calling cancel() leaves the observer firing until
+     * [Lattice.close].
+     *
      * @param callback Called with the change whenever the collection changes
      * @return A Cancellable token. The observation continues until this token
-     *         is cancelled, the owning [Lattice] is closed, or the token is
-     *         garbage collected.
+     *         is cancelled or the owning [Lattice] is closed.
      */
     fun observe(callback: (CollectionChange) -> Unit): Cancellable {
         // Platform-specific observation handled via observer registry

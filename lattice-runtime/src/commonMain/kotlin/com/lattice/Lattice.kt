@@ -230,16 +230,23 @@ class Lattice private constructor(
             throw LatticeException("Failed to create database: ${NativeBridge.getLastError()}")
         }
 
+        // Declare the handle live BEFORE anything can observe it. The registry
+        // refuses to register observers against a handle it does not know, so
+        // this entry is what separates "open database" from "closed or freed
+        // pointer" for every observe/cancel/close that follows.
+        ObserverRegistry.registerHandle(dbHandle)
+
         // Register AuditLog table observer for changeStream (mirrors Swift's pattern).
         // When sync data arrives, the C++ layer creates AuditLog entries. Observing
         // AuditLog ensures changeStream fires for both local AND remote mutations.
         setupAuditLogObserver()
     }
 
-    private var auditLogObserverToken: Long = 0
-
     private fun setupAuditLogObserver() {
-        auditLogObserverToken = ObserverRegistry.observeTableRaw(
+        // The returned raw-observer token is deliberately discarded: nothing
+        // ever de-registers this observer individually. It lives exactly as
+        // long as the database and is torn down natively by close().
+        ObserverRegistry.observeTableRaw(
             dbHandle = dbHandle,
             tableName = "AuditLog",
         ) { operation, rowId, globalId ->
@@ -492,8 +499,6 @@ class Lattice private constructor(
         }
     }
 
-    private var closed = false
-
     // Managed object handles issued by this Lattice (add/find/query results).
     // Swift releases these deterministically via ARC deinit; Kotlin has no
     // deinit, so we release them in bulk on close(). Since LatticeCore
@@ -507,8 +512,9 @@ class Lattice private constructor(
     }
 
     /**
-     * Close the database connection. Idempotent: subsequent calls are no-ops
-     * (the underlying handle is released exactly once).
+     * Close the database connection. Idempotent and thread-safe: however many
+     * times — or on however many threads — close() is called, the underlying
+     * handle is torn down exactly once.
      *
      * Releases every managed-object handle issued by this instance; objects
      * obtained from this Lattice must not be accessed after close().
@@ -516,17 +522,24 @@ class Lattice private constructor(
      * Observation tokens handed out by this instance survive close(): they are
      * invalidated here, before the native database goes away, so cancelling
      * one afterwards is a safe no-op. Callers do not have to order observer
-     * teardown against close().
+     * teardown against close(). Observing after close() is equally safe and
+     * returns an already-inactive token.
      */
     fun close() {
-        if (closed) return
-        closed = true
-        // Invalidate outstanding observation tokens BEFORE the native database
-        // is closed and released. Once the handle is freed, forwarding it to
-        // the native remove-observer call would lock a mutex inside freed
-        // memory (SIGSEGV); after this returns, every cancel() is a no-op.
-        ObserverRegistry.invalidateObservers(dbHandle)
-        auditLogObserverToken = 0
+        // The open->closed transition happens inside the observer registry,
+        // under the same lock that guards observer registration and
+        // cancellation. Exactly one caller wins the transition and performs
+        // the teardown below; every other call — repeated or concurrent —
+        // returns here. (A plain Boolean guard would be neither atomic nor
+        // visible across threads: two racing closes could both pass it and
+        // double-free the native database.)
+        //
+        // Invalidating BEFORE the native database is closed and released also
+        // keeps the observer contract: once the handle is freed, forwarding it
+        // to a native observe/remove-observer call would lock a mutex inside
+        // freed memory (SIGSEGV); after this returns, every cancel() is a
+        // no-op and every new observe() returns an inactive token.
+        if (!ObserverRegistry.invalidateObservers(dbHandle)) return
         // Drop object references first so the db teardown below releases the
         // last reference (and with it the sqlite connections / fds).
         for (handle in issuedObjectHandles) {

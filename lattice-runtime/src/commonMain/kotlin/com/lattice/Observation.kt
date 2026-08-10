@@ -25,11 +25,10 @@ sealed class CollectionChange {
 }
 
 /**
- * A token that can be used to cancel an observation.
- * The observation is automatically cancelled when this token is collected
- * or when cancel() is called explicitly.
+ * A token that can be used to cancel an observation by calling [cancel].
  *
- * Mirrors Swift's AnyCancellable pattern.
+ * Mirrors Swift's AnyCancellable pattern, with one deliberate difference:
+ * there is no deinit-style auto-cancel. See the retention contract below.
  *
  * ### Lifetime contract
  *
@@ -39,6 +38,14 @@ sealed class CollectionChange {
  * order their teardown against [Lattice.close] — which matters on UI
  * frameworks where a store may be released before the views observing
  * it are unmounted.
+ *
+ * ### Retention contract
+ *
+ * The observer registry holds a strong reference to every active token
+ * (and its callback) until the token is cancelled or the owning [Lattice]
+ * is closed. Garbage collection never cancels an observation: dropping the
+ * last reference to a token without calling [cancel] leaves the observer
+ * registered — and its callback firing — until the lattice closes.
  */
 interface Cancellable {
     /**
@@ -65,13 +72,35 @@ interface Cancellable {
  */
 internal expect object ObserverRegistry {
     /**
+     * Declare [dbHandle] as a live, open database.
+     *
+     * Called by the [Lattice] constructor as soon as the native database
+     * exists, before any observer can be registered against it. Everything
+     * else the registry does keys off this liveness entry: [observeTable] and
+     * [observeTableRaw] refuse to touch native for a handle that has no entry
+     * (it is either closed or was never opened — in both cases the pointer
+     * must not be dereferenced), and [invalidateObservers] removes the entry
+     * exactly once. Registering a handle resets any state a previous database
+     * left behind, so a native allocation recycled at the same address starts
+     * clean.
+     */
+    fun registerHandle(dbHandle: Long)
+
+    /**
      * Register an observer for a table.
+     *
+     * The liveness check and the native registration happen together under
+     * the registry lock — the same lock [invalidateObservers] takes — so a
+     * registration can never race [Lattice.close] into a freed database. If
+     * the handle is already closed (or was never registered), no native call
+     * is made and an already-inactive no-op token is returned.
      *
      * @param dbHandle The database handle
      * @param tableName The table to observe
      * @param whereClause Optional filter (for future use)
      * @param callback The callback to invoke on changes
-     * @return A cancellable token
+     * @return A cancellable token; inactive from the start when the handle
+     *         is already closed
      */
     fun observeTable(
         dbHandle: Long,
@@ -84,7 +113,13 @@ internal expect object ObserverRegistry {
      * Register a raw table observer that receives operation, rowId, globalId strings.
      * Used for AuditLog observation (changeStream).
      *
-     * @return Observer token (0 on failure)
+     * Registers under the same lock and liveness gate as [observeTable], so it
+     * cannot race a close into a freed database either. Unlike [observeTable],
+     * the registration is NOT tracked: no [Cancellable] is handed out,
+     * [invalidateObservers] does not know about it, and it is only torn down
+     * natively when the database itself is closed.
+     *
+     * @return Observer token (0 on failure, or when the handle is closed)
      */
     fun observeTableRaw(
         dbHandle: Long,
@@ -93,18 +128,30 @@ internal expect object ObserverRegistry {
     ): Long
 
     /**
-     * Invalidate every observation still registered against [dbHandle].
+     * Transition [dbHandle] from open to closed, invalidating every
+     * [Cancellable] token handed out by [observeTable] for it. Raw observers
+     * from [observeTableRaw] are not tracked here — they are torn down
+     * natively with the database itself.
      *
      * Called by [Lattice.close] *before* the native database is closed and
-     * released. Every outstanding [Cancellable] handed out for this handle is
-     * marked dead while the registry lock is held, so a later `cancel()` can
-     * never forward the now-dangling handle across the native boundary
-     * (which would lock a mutex inside freed memory — a hard SIGSEGV).
+     * released. Every outstanding token for this handle is marked dead while
+     * the registry lock is held, so a later `cancel()` can never forward the
+     * now-dangling handle across the native boundary (which would lock a
+     * mutex inside freed memory — a hard SIGSEGV).
      *
-     * The ordering matters: because a token's liveness check and its native
-     * de-registration happen together under the registry lock, any `cancel()`
-     * that passed the check has finished its native call before this function
-     * returns, and every `cancel()` after it is a no-op.
+     * The ordering matters: token liveness checks, native de-registrations
+     * ([Cancellable.cancel]) and native registrations ([observeTable],
+     * [observeTableRaw]) all happen under the registry lock, so any of them
+     * that passed the liveness check has finished its native call before this
+     * function returns, and every one started after it sees a dead handle and
+     * never touches native.
+     *
+     * @return `true` if this call performed the open→closed transition —
+     *         exactly one caller per registered handle ever sees `true`.
+     *         [Lattice.close] uses this as its idempotence gate: only the
+     *         winner tears the native database down, making double-close and
+     *         close-racing-close safe under the same lock that guards
+     *         observation.
      */
-    fun invalidateObservers(dbHandle: Long)
+    fun invalidateObservers(dbHandle: Long): Boolean
 }
