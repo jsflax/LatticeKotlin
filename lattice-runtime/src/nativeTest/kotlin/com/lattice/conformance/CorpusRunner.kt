@@ -368,15 +368,23 @@ private fun snapshot(env: Env, shape: JsonObject): JsonArray {
 // Ops
 // =============================================================================
 
-private fun classifiedAdd(env: Env, obj: LatticeObject) {
-    val wasManaged = obj.isManaged
+// Classification by failure site (README "Canonical error identifiers"):
+// re-adding an object that was already PERSISTED -> already_managed; any other
+// backend rejection of the insert -> add_failed.
+//
+// The discriminator is the CALL SITE, not object state. `insert` always
+// constructs a fresh object (never persisted), and `add_existing` always
+// re-adds a ref that entered env.handles via a successful add or a database
+// fetch (always persisted). Inspecting the object instead is wrong twice over:
+// `isManaged` is true for every freshly constructed object (the plugin's init
+// block allocates the native handle at construction), which classified genuine
+// UNIQUE-constraint rejections as already_managed; and reading a native-backed
+// property like globalId here can touch an invalidated handle and crash.
+private fun classifiedAdd(env: Env, obj: LatticeObject, wasPersisted: Boolean) {
     try {
         env.requireDb().add(obj)
     } catch (e: LatticeException) {
-        // Classification by failure site (README "Canonical error identifiers"):
-        // re-adding a handle that was already persisted -> already_managed;
-        // any other backend rejection of the insert -> add_failed.
-        throw OpError(if (wasManaged) "already_managed" else "add_failed", e)
+        throw OpError(if (wasPersisted) "already_managed" else "add_failed", e)
     }
 }
 
@@ -388,7 +396,7 @@ private fun opInsert(env: Env, op: JsonObject) {
         val setter = spec.setters[k] ?: throw CorpusError("unknown property $table.$k")
         setter(obj, convertValue(env, table, k, v))
     }
-    classifiedAdd(env, obj)
+    classifiedAdd(env, obj, wasPersisted = false)
     op["as"]?.let { env.handles[it.jsonPrimitive.content] = obj }
     op["save_id"]?.let { env.ids[it.jsonPrimitive.content] = obj.id }
 }
@@ -455,7 +463,7 @@ private fun dispatch(env: Env, op: JsonObject) {
     when (val name = op.getValue("op").jsonPrimitive.content) {
         "insert" -> opInsert(env, op)
 
-        "add_existing" -> classifiedAdd(env, handleOf(env, op))
+        "add_existing" -> classifiedAdd(env, handleOf(env, op), wasPersisted = true)
 
         "get" -> {
             val spec = env.spec(op.getValue("table").jsonPrimitive.content)

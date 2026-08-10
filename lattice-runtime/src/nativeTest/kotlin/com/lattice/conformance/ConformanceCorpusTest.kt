@@ -65,38 +65,16 @@ class ConformanceCorpusTest {
     // lives in latticekotlin itself (compiler plugin / NativeBridge /
     // Results) and only shrinks by fixing the Kotlin SDK. The core-layer
     // divergences ledgered against 1.0.0-rc.1 cleared with the 1.0.1
-    // submodule bump: transactions/own-writes-visible-inside now PASSES
-    // (verified — core 1.0.1's in-transaction read routing is thread-scoped,
-    // and this runner's ops all execute on the txn-owning test thread),
-    // while the two unique-violation scenarios below remain, reduced to
-    // their binding-only cause.
+    // submodule bump (transactions/own-writes-visible-inside), and the two
+    // unique-violation scenarios cleared once @Unique emission landed AND the
+    // runner stopped misclassifying insert failures: `isManaged` is true for
+    // every freshly constructed object, so classifiedAdd reported genuine
+    // UNIQUE-constraint rejections as already_managed. With call-site
+    // classification, uniqueness is verified enforced end-to-end (constraint
+    // fires, transaction rolls back).
     // =========================================================================
     private val DIVERGENCE_LEDGER: Map<String, String> = buildMap {
         // --- binding layer (latticekotlin-specific; NOT present in python) ---
-
-        // op: insert(expect_error=add_failed). Expected: duplicate insert into
-        // a unique column fails, table keeps 2 rows. Actual: the insert
-        // SUCCEEDS (3 rows, dup present). Core 1.0.1 fixed its half (unique
-        // DDL now reaches the dynamic-schema path), but the flag never gets
-        // there from Kotlin: the compiler plugin does not read @Unique (no
-        // is_unique in generated descriptors) and NativeBridgeImpl hard-codes
-        // is_unique=false. Verified still diverging on the 1.0.1 pin.
-        put(
-            "errors/unique-violation-add-failed",
-            "core: the binding half is FIXED — the plugin now reads @Unique and is_unique " +
-                "reaches the C ABI through both bridges (proven by query-fts/*, which conform " +
-                "via the identical path). The duplicate insert still succeeds against a " +
-                "freshly-built 1.0.1, so single-column uniqueness declared over the C ABI " +
-                "produces no enforced constraint core-side."
-        )
-        // op: transaction(expect_error=add_failed). Expected: inner duplicate
-        // insert fails, transaction rolls back, final rows [[x, first]].
-        // Actual: both inner inserts succeed and commit. Same root cause.
-        put(
-            "transactions/error-inside-rolls-back",
-            "core: same residual is_unique gap as errors/unique-violation-add-failed — the " +
-                "duplicate insert inside the transaction succeeds, so nothing rolls back"
-        )
 
         // (query-fts/* removed: the six FTS scenarios now conform. The plugin
         // reads @FullText and the flag reaches the C ABI through both bridges,
