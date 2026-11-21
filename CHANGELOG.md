@@ -1,5 +1,47 @@
 # Changelog
 
+## 3.1.2 — 2026-11-21
+
+### Added
+
+- **LatticeCore 3.1.2 (`LatticeCAPI` 1.1.0) alignment.** Advances the core pin
+  from `1.0.1` to `3.1.2`, bringing cross-process notification watch sharing,
+  6-argument sync progress callbacks, replication slots, audit log retention,
+  and CAPI 1.1.0 schema v2 extensions to Android/JVM and Kotlin/Native.
+- **Sum-type `@Union` properties.** Sealed interfaces and sealed classes
+  annotated with `@Union` and `@UnionCase` (including `@Unlabeled` single
+  `@Embedded` payloads) compile to `LATTICE_KIND_UNION` tables with full local
+  query and WebSocket sync parity across Android JNI and Kotlin/Native.
+- **`@NoHistory` streaming properties, `@Unique(compoundedWith, allowsUpsert)`,
+  `@Model(tableName)`, and `@Property(name)`.** Full K2 FIR/IR compiler plugin
+  support for audit-exempt high-frequency columns, compound/upsert unique
+  constraints, and custom SQLite table/column names.
+- **Vector KNN, Geospatial R*Tree, and Collection types.** `FloatVector`
+  (`Results.nearest`), `GeoBounds` (`Results.withinBounds`), `List<@Embedded>`,
+  `Set<@LatticeEnum>`, `List<@LatticeEnum>`, and `List<Int|Long|Double>`.
+- **Off-Main-Thread Compose `Results.asFlow(cacheRows = true)`.** Materializes
+  per-object C++ row caches on `defaultQueryDispatcher` so UI recomposition
+  reads scalar, `@Embedded`, enum, temporal, and collection properties with zero
+  SQLite statements on Android's Main thread.
+- **Ktor 3.0.0 WebSocket sync & TLS leaf SHA-256 pinning.** Generation-fenced
+  receive-recovery redials (`connect()` while `OPEN`), deterministic `close()`
+  teardown, and OkHttp leaf DER SHA-256 certificate pinning.
+- **Gradle plugin publication.** Publishes `io.github.jsflax:lattice-gradle-plugin:3.1.2`
+  with plugin IDs `io.github.jsflax.lattice` and `com.lattice`.
+- **Android 16 KB ELF page-size compliance.** Ships NDK r27c (`27.2.12479018`)
+  `arm64-v8a` and `x86_64` native libraries (`libLatticeCAPI.so` and
+  `liblattice_jni.so`) with `PT_LOAD` `p_align = 16384` and bundled R8 consumer
+  keep rules (`consumer-rules.pro`).
+
+### Fixed
+
+- **Zero-leak native handle lifecycle & SQLite FD release.** Adds FIR/IR
+  hydration constructor `(Long, LatticeHydrationMarker)`, `NativeHandleArena`
+  with Android API-26+ `PhantomReference` reaper (`Lattice` `dbHandle` is never
+  GC-closed), and balanced pre-add unmanaged handle release in `Lattice.add`.
+- **Zero cross-SDK conformance divergences.** Clears every remaining entry in
+  `ConformanceCorpusTest` (`DIVERGENCE_LEDGER = emptyMap()`).
+
 ## 1.1.0 — 2026-08-09
 
 ### Breaking
