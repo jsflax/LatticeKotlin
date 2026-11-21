@@ -19,3 +19,4 @@ lattice-runtime/libs/
 
 # CMake build artifacts
 lattice-runtime/.cxx/
+LatticeCore/cmake-build*/

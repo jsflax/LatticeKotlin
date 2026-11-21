@@ -17,11 +17,6 @@ dependencies {
     testImplementation("com.github.tschuchortdev:kotlin-compile-testing:1.5.0")
 }
 
-// The plugin jar is loaded BY a Kotlin compile daemon, so its bytecode level must
-// be <= the daemon's JDK. lattice-runtime's Android compilations run on JDK 17
-// (jvmTarget = 17), and without this the daemon rejects the jar with
-// UnsupportedClassVersionError — which surfaces only on the JVM/Android path,
-// never on native.
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
@@ -37,9 +32,15 @@ tasks.test {
     useJUnitPlatform()
 }
 
+val hasSigningKey = providers.gradleProperty("signingInMemoryKey").isPresent ||
+    providers.environmentVariable("ORG_GRADLE_PROJECT_signingInMemoryKey").isPresent ||
+    providers.gradleProperty("signing.keyId").isPresent
+
 mavenPublishing {
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
-    signAllPublications()
+    if (hasSigningKey) {
+        signAllPublications()
+    }
     coordinates("io.github.jsflax", "lattice-compiler-plugin", version.toString())
     pom {
         name.set("Lattice Compiler Plugin")

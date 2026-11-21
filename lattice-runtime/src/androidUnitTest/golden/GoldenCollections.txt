@@ -1,8 +1,11 @@
 # codegen shape: com.lattice.codegen.GoldenCollections
 
 getCounts()Ljava/util/List;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
   LOAD 0
-  FIELD com/lattice/codegen/GoldenCollections.counts:Ljava/util/List;
+  FIELD com/lattice/codegen/GoldenCollections._lattice_handle_field_GoldenCollections:J
+  CONST "counts"
+  INVOKE com/lattice/LatticeNative.getIntList(JLjava/lang/String;)Ljava/util/List;
 
 getGlobalId()Ljava/lang/String;
   LOAD 0
@@ -42,9 +45,12 @@ setCounts(Ljava/util/List;)V
   LOAD 1
   CONST "<set-?>"
   INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
   LOAD 0
+  FIELD com/lattice/codegen/GoldenCollections._lattice_handle_field_GoldenCollections:J
+  CONST "counts"
   LOAD 1
-  FIELD com/lattice/codegen/GoldenCollections.counts:Ljava/util/List;
+  INVOKE com/lattice/LatticeNative.setIntList(JLjava/lang/String;Ljava/util/List;)V
 
 setName(Ljava/lang/String;)V
   LOAD 1

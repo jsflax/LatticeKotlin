@@ -1,0 +1,54 @@
+name: Publish to Maven Central
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Fetch conformance corpus
+        run: git -C LatticeCore fetch origin conformance-corpus:refs/remotes/origin/conformance-corpus
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK Platform 36 & NDK 27.2.12479018
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Build Host & Android NDK Libraries (16 KB ELF Verified)
+        env:
+          CC: clang
+          CXX: clang++
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
+        run: |
+          python3 build.py
+          python3 build.py --android
+
+      - name: Run Verification Suite
+        run: ./gradlew :lattice-compiler-plugin:test :lattice-gradle-plugin:test :lattice-runtime:testDebugUnitTest :lattice-runtime:macosArm64Test --stacktrace
+
+      - name: Publish All Modules to Maven Central Portal
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyId: ${{ secrets.SIGNING_KEY_ID }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}
+        run: ./gradlew publishAllPublicationsToMavenCentralRepository --no-configuration-cache --stacktrace

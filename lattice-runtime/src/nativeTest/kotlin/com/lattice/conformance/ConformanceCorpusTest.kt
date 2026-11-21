@@ -73,35 +73,7 @@ class ConformanceCorpusTest {
     // classification, uniqueness is verified enforced end-to-end (constraint
     // fires, transaction rolls back).
     // =========================================================================
-    private val DIVERGENCE_LEDGER: Map<String, String> = buildMap {
-        // --- binding layer (latticekotlin-specific; NOT present in python) ---
-
-        // (query-fts/* removed: the six FTS scenarios now conform. The plugin
-        // reads @FullText and the flag reaches the C ABI through both bridges,
-        // so the FTS5 shadow table is created and Results.matching() resolves.)
-
-        // KNN is core-required (undeclarable), but latticekotlin has no public
-        // KNN query API at all: DistanceMetric/NearestMatch are inert data
-        // classes, Results has no nearest(), and lattice_db_query_nearest is
-        // not wrapped by NativeBridge.
-        val knnCause = "binding: no public KNN API — lattice_db_query_nearest unwrapped, " +
-            "Results has no nearest() (DistanceMetric/NearestMatch are inert)"
-        put("query-knn/l2-order-and-distances", knnCause)
-        put("query-knn/l2-top-k", knnCause)
-        put("query-knn/cosine-order", knnCause)
-        put("query-knn/knn-with-where-prefilter", knnCause)
-
-        // distinct_by enumeration. Expected one row per distinct city;
-        // actual: all four rows. Results.distinct(by) routes the column into
-        // count (queryCountDistinct) only — enumeration (toList/iterator/get)
-        // calls queryObjects without it. NativeBridge.queryDistinct exists but
-        // Results never uses it.
-        put(
-            "query-shape/distinct-by",
-            "binding: Results.distinct(by) affects count only — enumeration ignores distinctBy " +
-                "(queryObjects path; NativeBridge.queryDistinct is wrapped but unused by Results)"
-        )
-    }
+    private val DIVERGENCE_LEDGER: Map<String, String> = emptyMap()
 
     // =========================================================================
     // Suite tests — one per corpus file, plus a coverage completeness check.

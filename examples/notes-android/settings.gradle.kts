@@ -1,4 +1,5 @@
 pluginManagement {
+    includeBuild("../..")
     repositories {
         google()
         mavenCentral()
@@ -16,10 +17,9 @@ dependencyResolutionManagement {
 
 rootProject.name = "LatticeNotesAndroid"
 
-// Include the lattice modules from parent project
 includeBuild("../..") {
     dependencySubstitution {
-        substitute(module("com.lattice:lattice-runtime")).using(project(":lattice-runtime"))
+        substitute(module("io.github.jsflax:lattice-runtime")).using(project(":lattice-runtime"))
     }
 }
 

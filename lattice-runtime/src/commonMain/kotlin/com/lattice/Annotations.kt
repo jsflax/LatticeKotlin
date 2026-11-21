@@ -3,22 +3,14 @@ package com.lattice
 /**
  * Marks a class as a Lattice model.
  *
- * The compiler plugin transforms this class to:
- * 1. Implement [LatticeObject] interface
- * 2. Add a native handle backing field
- * 3. Transform property getters/setters to delegate to native when managed
- *
- * ```kotlin
- * @Model
- * class Trip {
- *     var name: String = ""
- *     var days: Int = 0
- * }
- * ```
+ * By default the SQLite table name matches the class simple name.
+ * Pass [tableName] to override the table name explicitly.
  */
 @Target(AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.BINARY)
-annotation class Model
+annotation class Model(
+    val tableName: String = ""
+)
 
 /**
  * Marks a property as a link to another model (to-one relationship).
@@ -35,7 +27,7 @@ annotation class Link
 annotation class LinkList
 
 /**
- * Marks a class as an embedded model (stored inline, not as separate table).
+ * Marks a class as an embedded model (stored inline as JSON TEXT).
  */
 @Target(AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.BINARY)
@@ -50,14 +42,6 @@ annotation class Ignore
 
 /**
  * Marks a property to have a non-unique index created on its column.
- *
- * ```kotlin
- * @Model
- * class Product {
- *     @Indexed var name: String = ""
- *     @Indexed var category: String = ""
- * }
- * ```
  */
 @Target(AnnotationTarget.PROPERTY)
 @Retention(AnnotationRetention.BINARY)
@@ -65,21 +49,6 @@ annotation class Indexed
 
 /**
  * Marks a property as having a unique constraint.
- *
- * For compound unique constraints, use [compoundedWith] to specify
- * additional property names that form the compound key.
- *
- * Set [allowsUpsert] to true to allow INSERT OR REPLACE behavior.
- *
- * ```kotlin
- * @Model
- * class User {
- *     @Unique var email: String = ""
- *     @Unique(compoundedWith = ["firstName"], allowsUpsert = true)
- *     var lastName: String = ""
- *     var firstName: String = ""
- * }
- * ```
  */
 @Target(AnnotationTarget.PROPERTY)
 @Retention(AnnotationRetention.BINARY)
@@ -90,29 +59,51 @@ annotation class Unique(
 
 /**
  * Marks a property for full-text search indexing (FTS5).
- *
- * ```kotlin
- * @Model
- * class Article {
- *     var title: String = ""
- *     @FullText var content: String = ""
- * }
- * ```
  */
 @Target(AnnotationTarget.PROPERTY)
 @Retention(AnnotationRetention.BINARY)
 annotation class FullText
 
 /**
+ * Marks a streamed/rapidly-mutated primitive property so UPDATE audit triggers
+ * record that the column changed without copying intermediate snapshots into
+ * AuditLog (sync late-binds the live value at upload time).
+ */
+@Target(AnnotationTarget.PROPERTY)
+@Retention(AnnotationRetention.BINARY)
+annotation class NoHistory
+
+/**
+ * Marks a sealed interface or sealed class as a native Lattice @Union type
+ * stored in an owned `_<UnionName>` internal table.
+ */
+@Target(AnnotationTarget.CLASS)
+@Retention(AnnotationRetention.BINARY)
+annotation class Union(
+    val tableName: String = ""
+)
+
+/**
+ * Optional override for a @Union case's wire discriminator name
+ * (defaults to decapitalized subclass simpleName, matching Swift enum case names).
+ */
+@Target(AnnotationTarget.CLASS)
+@Retention(AnnotationRetention.BINARY)
+annotation class UnionCase(
+    val name: String
+)
+
+/**
+ * Marks a single-value @Union case parameter as unlabeled on the wire
+ * (`param_name = ""`, SQLite column `<caseName>`, union_value key `"_0"`),
+ * matching Swift `case verdict(VerdictPayload)`.
+ */
+@Target(AnnotationTarget.VALUE_PARAMETER, AnnotationTarget.PROPERTY)
+@Retention(AnnotationRetention.BINARY)
+annotation class Unlabeled
+
+/**
  * Maps a Kotlin property name to a custom column name in the database.
- *
- * ```kotlin
- * @Model
- * class Person {
- *     @Property(name = "full_name")
- *     var fullName: String = ""
- * }
- * ```
  */
 @Target(AnnotationTarget.PROPERTY)
 @Retention(AnnotationRetention.BINARY)
@@ -122,35 +113,10 @@ annotation class Property(
 
 /**
  * Marks an enum class as a Lattice-compatible enum.
- *
- * By default, enums are stored as TEXT using the enum entry name.
- * Set [storeAsOrdinal] to true to store as INTEGER using the ordinal.
- *
- * ```kotlin
- * @LatticeEnum
- * enum class Status {
- *     PENDING, ACTIVE, COMPLETED
- * }
- *
- * @Model
- * class Task {
- *     var status: Status = Status.PENDING
- * }
- * ```
  */
 @Target(AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.BINARY)
 annotation class LatticeEnum(
     val storeAsOrdinal: Boolean = false,
-    /**
-     * Name of the entry to fall back to when the stored value matches no entry —
-     * a value written by a newer client, or one removed from the enum since.
-     * Empty means the first declared entry.
-     *
-     * Without a fallback the generated getter calls `valueOf`, which THROWS on an
-     * unknown value; Swift's Lattice falls back instead. Reading a row therefore
-     * has to be able to fail, which is why consumers reach for raw `String`
-     * columns instead of this annotation.
-     */
     val defaultValue: String = ""
 )

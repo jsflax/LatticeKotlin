@@ -5,19 +5,21 @@ import org.jetbrains.kotlin.backend.common.extensions.IrPluginContext
 import org.jetbrains.kotlin.backend.common.lower.DeclarationIrBuilder
 import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity
 import org.jetbrains.kotlin.cli.common.messages.MessageCollector
+import org.jetbrains.kotlin.descriptors.ClassKind
 import org.jetbrains.kotlin.descriptors.DescriptorVisibilities
 import org.jetbrains.kotlin.descriptors.Modality
 import org.jetbrains.kotlin.ir.IrStatement
 import org.jetbrains.kotlin.ir.UNDEFINED_OFFSET
 import org.jetbrains.kotlin.ir.builders.*
+import org.jetbrains.kotlin.ir.builders.declarations.addValueParameter
 import org.jetbrains.kotlin.ir.declarations.*
 import org.jetbrains.kotlin.ir.expressions.*
 import org.jetbrains.kotlin.ir.expressions.impl.*
 import org.jetbrains.kotlin.ir.symbols.IrClassSymbol
+import org.jetbrains.kotlin.ir.symbols.IrConstructorSymbol
 import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
 import org.jetbrains.kotlin.ir.symbols.UnsafeDuringIrConstructionAPI
 import org.jetbrains.kotlin.ir.symbols.impl.*
-import org.jetbrains.kotlin.ir.declarations.impl.IrAnonymousInitializerImpl
 import org.jetbrains.kotlin.ir.types.*
 import org.jetbrains.kotlin.ir.types.isNullable
 import org.jetbrains.kotlin.ir.util.*
@@ -27,46 +29,23 @@ import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
 
 /**
- * IR Transformer for @Model classes.
+ * IR Transformer for `@Model` classes (LatticeKotlin 3.1.2 / Kotlin 2.4 K2 FIR+IR).
  *
- * Follows Swift's approach:
- * - C++ object is created at init time with schema (using createObjectWithSchema)
- * - All property storage is in C++ - no local Kotlin storage
- * - Property access always goes through C++ API
- *
- * Transforms:
- * ```kotlin
- * @Model
- * class Trip {
- *     var name: String = ""
- *     var days: Int = 0
- * }
- * ```
- *
- * Into:
- * ```kotlin
- * class Trip : LatticeObject {
- *     override var _latticeHandle: Long = LatticeNative.createObjectWithSchema("Trip", _latticeSchema)
- *     override val _latticeTableName: String get() = "Trip"
- *
- *     var name: String
- *         get() = LatticeNative.getString(_latticeHandle, "name")
- *         set(value) = LatticeNative.setString(_latticeHandle, "name", value)
- *
- *     // similar for days...
- * }
- *
- * init {
- *     // Copy initial values from backing fields to C++
- *     LatticeNative.setString(_latticeHandle, "name", backingField_name)
- *     LatticeNative.setInt(_latticeHandle, "days", backingField_days)
- * }
- * ```
+ * Implements:
+ * - Zero-leak hydration constructor `constructor(handle: Long, marker: LatticeHydrationMarker)`
+ * - `_latticeHandle`, `_latticeTableName` (`@Model(tableName)`), `_latticeSchema`, `_copyPropertiesToNative`
+ * - Schema flags: `@Unique(compoundedWith, allowsUpsert)`, `@Indexed`, `@FullText`, `@NoHistory`,
+ *   `FloatVector`/`DoubleVector` (`FLAG_VECTOR`), `GeoBounds` (`FLAG_GEO_BOUNDS`), `@Property(name)`
+ * - `@Union` sealed interfaces & sealed classes (`LATTICE_KIND_UNION = 5`, including unlabeled single
+ *   `@Embedded` payloads matching Swift `case verdict(VerdictPayload)`)
+ * - Collections: `List<String|Int|Long|Double>`, `Set<String>`, `Map<String, String>`,
+ *   `List<@Embedded>`, `List<@LatticeEnum>`, `Set<@LatticeEnum>`
  */
 @OptIn(UnsafeDuringIrConstructionAPI::class)
 class LatticeIrTransformer(
     private val pluginContext: IrPluginContext,
-    private val messageCollector: MessageCollector
+    private val messageCollector: MessageCollector,
+    private val moduleFragment: IrModuleFragment
 ) : IrElementTransformerVoidWithContext() {
 
     private val modelAnnotationFqn = FqName("com.lattice.Model")
@@ -78,16 +57,19 @@ class LatticeIrTransformer(
     private val uniqueAnnotationFqn = FqName("com.lattice.Unique")
     private val indexedAnnotationFqn = FqName("com.lattice.Indexed")
     private val fullTextAnnotationFqn = FqName("com.lattice.FullText")
+    private val noHistoryAnnotationFqn = FqName("com.lattice.NoHistory")
+    private val propertyAnnotationFqn = FqName("com.lattice.Property")
+    private val unionAnnotationFqn = FqName("com.lattice.Union")
+    private val unionCaseAnnotationFqn = FqName("com.lattice.UnionCase")
+    private val unlabeledAnnotationFqn = FqName("com.lattice.Unlabeled")
+
     private val latticeObjectFqn = FqName("com.lattice.LatticeObject")
     private val latticeNativeFqn = FqName("com.lattice.LatticeNative")
-    private val latticePropertyDescriptorFqn = FqName("com.lattice.LatticePropertyDescriptor")
-    private val latticeTypeFqn = FqName("com.lattice.LatticeType")
-    private val latticePropertyKindFqn = FqName("com.lattice.LatticePropertyKind")
+    private val latticeHydrationMarkerFqn = FqName("com.lattice.LatticeHydrationMarker")
 
     private val irFactory get() = pluginContext.irFactory
     private val irBuiltIns get() = pluginContext.irBuiltIns
 
-    // Lazy references to runtime classes
     private val latticeObjectClass: IrClassSymbol? by lazy {
         pluginContext.referenceClass(ClassId.topLevel(latticeObjectFqn))
     }
@@ -96,16 +78,18 @@ class LatticeIrTransformer(
         pluginContext.referenceClass(ClassId.topLevel(latticeNativeFqn))
     }
 
-    private val latticePropertyDescriptorClass: IrClassSymbol? by lazy {
-        pluginContext.referenceClass(ClassId.topLevel(latticePropertyDescriptorFqn))
+    private val latticeHydrationMarkerClass: IrClassSymbol? by lazy {
+        pluginContext.referenceClass(ClassId.topLevel(latticeHydrationMarkerFqn))
     }
 
-    private val latticeTypeClass: IrClassSymbol? by lazy {
-        pluginContext.referenceClass(ClassId.topLevel(latticeTypeFqn))
-    }
-
-    private val latticePropertyKindClass: IrClassSymbol? by lazy {
-        pluginContext.referenceClass(ClassId.topLevel(latticePropertyKindFqn))
+    companion object {
+        const val FLAG_UNIQUE = 1
+        const val FLAG_INDEXED = 2
+        const val FLAG_FULL_TEXT = 4
+        const val FLAG_VECTOR = 8
+        const val FLAG_NO_HISTORY = 16
+        const val FLAG_GEO_BOUNDS = 32
+        const val FLAG_ALLOWS_UPSERT = 64
     }
 
     override fun visitClassNew(declaration: IrClass): IrStatement {
@@ -132,185 +116,150 @@ class LatticeIrTransformer(
             return super.visitClassNew(declaration)
         }
 
-        messageCollector.report(
-            CompilerMessageSeverity.WARNING,
-            "Lattice: Transforming @Model class '${declaration.name}'"
-        )
-
-        // FIR has already added:
-        // - LatticeObject interface
-        // - _latticeHandle property declaration
-        // - _latticeTableName property declaration
-        // We need to:
-        // 1. Create a backing field for _latticeHandle
-        // 2. Implement the getters/setters for the FIR-generated properties
-
-        // Find FIR-generated _latticeHandle property
-        val handleProperty = declaration.properties.find { it.name.asString() == "_latticeHandle" }
-
-        // Find or create backing field for _latticeHandle
-        val handleField = findOrCreateHandleField(declaration, latticeNative)
-        // Only add to declarations if not already present
+        val handleField = findOrCreateHandleField(declaration)
         if (handleField !in declaration.declarations) {
             declaration.declarations.add(handleField)
         }
 
+        // Implement FIR-generated zero-leak hydration constructor (Long, LatticeHydrationMarker)
+        implementHydrationConstructor(declaration, handleField)
+
+        // Implement FIR-generated _latticeHandle property
+        val handleProperty = declaration.properties.find { it.name.asString() == "_latticeHandle" }
         if (handleProperty != null) {
-            // Implement the FIR-generated _latticeHandle property
-            implementHandleProperty(declaration, handleProperty, handleField)
-        } else {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: _latticeHandle property not found (should be generated by FIR)"
-            )
+            implementHandleProperty(handleProperty, handleField)
         }
 
-        // Find and implement FIR-generated _latticeTableName property
+        // Implement FIR-generated _latticeTableName property
         val tableNameProperty = declaration.properties.find { it.name.asString() == "_latticeTableName" }
         if (tableNameProperty != null) {
             implementTableNameProperty(declaration, tableNameProperty)
-        } else {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: _latticeTableName property not found (should be generated by FIR)"
-            )
         }
 
-        // Find user properties first (we need this for schema)
         val userProperties = declaration.properties.filter { prop ->
             val name = prop.name.asString()
-            name !in setOf("_latticeHandle", "_latticeTableName", "_latticeSchema", "isManaged") &&
+            name !in setOf("_latticeHandle", "_latticeTableName", "_latticeSchema", "isManaged", "id", "globalId") &&
                 !prop.hasAnnotation(ignoreAnnotationFqn) &&
                 prop.backingField != null
         }.toList()
 
-        // Find and implement FIR-generated _latticeSchema property
+        // Implement FIR-generated _latticeSchema property
         val allSchemaProps = declaration.properties.filter { it.name.asString() == "_latticeSchema" }.toList()
-        messageCollector.report(CompilerMessageSeverity.WARNING,
-            "Lattice: _latticeSchema candidates: ${allSchemaProps.map { "origin=${it.origin} fake=${it.isFakeOverride} getter_origin=${it.getter?.origin} getter_fake=${it.getter?.isFakeOverride}" }}")
-        // Prefer non-fake-override (FIR-generated) over fake override (from interface)
         val schemaProperty = allSchemaProps.find { !it.isFakeOverride } ?: allSchemaProps.firstOrNull()
         if (schemaProperty != null) {
-            implementSchemaProperty(declaration, schemaProperty, userProperties)
-        } else {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: _latticeSchema property not found (should be generated by FIR)"
-            )
+            implementSchemaProperty(schemaProperty, userProperties, latticeNative)
         }
 
-        // Find and implement FIR-generated _copyPropertiesToNative function
+        // Implement FIR-generated _copyPropertiesToNative function
         val copyFunction = declaration.functions.find { it.name.asString() == "_copyPropertiesToNative" }
         if (copyFunction != null) {
-            implementCopyToNativeFunction(declaration, copyFunction, userProperties, latticeNative)
-        } else {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: _copyPropertiesToNative function not found (should be generated by FIR)"
-            )
+            implementCopyToNativeFunction(copyFunction, userProperties, latticeNative)
         }
 
-        // Transform user properties
-        val propertiesToTransform = declaration.properties.filter { prop ->
-            val name = prop.name.asString()
-            name !in setOf("_latticeHandle", "_latticeTableName", "_latticeSchema", "isManaged") &&
-                !prop.hasAnnotation(ignoreAnnotationFqn) &&
-                prop.backingField != null
-        }.toList()
+        // Add primary-constructor init block that allocates the unmanaged native object
+        addInitBlock(declaration, handleField, userProperties, latticeNative)
 
-        // Add init block that creates C++ object with schema and copies initial values
-        addInitBlock(declaration, handleField, propertiesToTransform, latticeNative)
-
-        propertiesToTransform.forEach { property ->
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice:   Transforming property '${property.name}'"
-            )
+        userProperties.forEach { property ->
             transformProperty(declaration, property, handleField, latticeNative)
         }
 
-        // Register factory so Lattice and VirtualModelRegistry can create instances
         addFactoryRegistration(declaration)
 
         return super.visitClassNew(declaration)
     }
 
-    /**
-     * Add factory registration to companion object.
-     * Generates code that registers the factory when the companion object is initialized:
-     *
-     *   companion object {
-     *       init {
-     *           Lattice.registerFactory(MyClass::class) { MyClass() }
-     *       }
-     *   }
-     */
+    // =========================================================================
+    // Hydration Constructor & Factory Registration
+    // =========================================================================
+
+    private fun findHydrationConstructor(irClass: IrClass): IrConstructor? {
+        return irClass.constructors.find { ctor ->
+            !ctor.isPrimary &&
+                ctor.regularParameters.size == 2 &&
+                ctor.regularParameters[0].type.isLong() &&
+                ctor.regularParameters[1].type.classOrNull?.owner?.fqNameWhenAvailable == latticeHydrationMarkerFqn
+        }
+    }
+
+    private fun implementHydrationConstructor(
+        irClass: IrClass,
+        handleField: IrField
+    ) {
+        val hydrationCtor = findHydrationConstructor(irClass) ?: return
+        val handleParam = hydrationCtor.regularParameters.getOrNull(0) ?: return
+        val thisReceiver = irClass.thisReceiver ?: return
+
+        val superClass = irClass.superTypes
+            .mapNotNull { it.classOrNull?.owner }
+            .firstOrNull { it.kind == ClassKind.CLASS }
+            ?: irBuiltIns.anyClass.owner
+        val superCtor = superClass.constructors.firstOrNull { it.regularParameters.isEmpty() }
+            ?: irBuiltIns.anyClass.owner.constructors.first()
+
+        // Do NOT emit IrInstanceInitializerCall in a non-primary constructor:
+        // Kotlin/Native InitializersLowering asserts `declaration.isPrimary || allInitializers.isEmpty()`
+        // and delegating directly to superCtor avoids running addInitBlock (zero throwaway C++ allocation).
+        // Initialize @Ignore backing fields directly from their declared initializers.
+        val ignoredProperties = irClass.properties.filter { prop ->
+            prop.hasAnnotation(ignoreAnnotationFqn) && prop.backingField != null
+        }.toList()
+
+        hydrationCtor.origin = LatticeDeclarationOrigin
+        hydrationCtor.body = DeclarationIrBuilder(pluginContext, hydrationCtor.symbol).irBlockBody {
+            +irDelegatingConstructorCall(superCtor)
+            +irSetField(irGet(thisReceiver), handleField, irGet(handleParam))
+            for (prop in ignoredProperties) {
+                val bf = prop.backingField ?: continue
+                val rawInit = bf.initializer?.expression ?: continue
+                val sourceExpr = if (
+                    rawInit is IrGetValue &&
+                    (rawInit.symbol.owner as? IrValueParameter)?.parent == irClass.primaryConstructor
+                ) {
+                    (rawInit.symbol.owner as IrValueParameter).defaultValue?.expression
+                } else {
+                    rawInit
+                }
+                if (sourceExpr != null) {
+                    +irSetField(irGet(thisReceiver), bf, sourceExpr.deepCopyWithSymbols(hydrationCtor))
+                }
+            }
+        }
+    }
+
     private fun addFactoryRegistration(irClass: IrClass) {
-        // Find VirtualModelRegistry for table-based factory registration
+        val companion = irClass.declarations
+            .filterIsInstance<IrClass>()
+            .find { it.isCompanion }
+            ?: return
+
+        val modelConstructor = irClass.primaryConstructor ?: return
+        val hydrationConstructor = findHydrationConstructor(irClass)
+        val markerSymbol = latticeHydrationMarkerClass
+        val tableName = resolveModelTableName(irClass)
+
+        val latticeClass = pluginContext.referenceClass(ClassId.topLevel(FqName("com.lattice.Lattice"))) ?: return
+        val latticeCompanion = latticeClass.owner.declarations
+            .filterIsInstance<IrClass>()
+            .find { it.isCompanion } ?: return
+
+        val registerFactoryFn = latticeCompanion.declarations
+            .filterIsInstance<IrSimpleFunction>()
+            .find { it.name.asString() == "registerFactory" } ?: return
+
+        val registerHydrationFactoryFn = latticeCompanion.declarations
+            .filterIsInstance<IrSimpleFunction>()
+            .find { it.name.asString() == "registerHydrationFactory" }
+
         val virtualModelRegistryClass = pluginContext.referenceClass(
             ClassId.topLevel(FqName("com.lattice.VirtualModelRegistry"))
         )
         val registerTableFactoryFn = virtualModelRegistryClass?.owner?.declarations
             ?.filterIsInstance<IrSimpleFunction>()
             ?.find { it.name.asString() == "registerTableFactory" }
-
-        // Find Lattice class
-        val latticeClass = pluginContext.referenceClass(ClassId.topLevel(FqName("com.lattice.Lattice")))
-        if (latticeClass == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot find Lattice class for factory registration"
-            )
-            return
-        }
-
-        // Find registerFactory function
-        val registerFactoryFn = latticeClass.owner.declarations
-            .filterIsInstance<IrClass>()
-            .find { it.isCompanion }
-            ?.declarations
+        val registerTableHydrationFactoryFn = virtualModelRegistryClass?.owner?.declarations
             ?.filterIsInstance<IrSimpleFunction>()
-            ?.find { it.name.asString() == "registerFactory" }
+            ?.find { it.name.asString() == "registerTableHydrationFactory" }
 
-        if (registerFactoryFn == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot find Lattice.registerFactory function"
-            )
-            return
-        }
-
-        // Find or create companion object
-        var companion = irClass.declarations
-            .filterIsInstance<IrClass>()
-            .find { it.isCompanion }
-
-        if (companion == null) {
-            // Skip companion creation — factory registration will be handled
-            // via reflection on JVM/Android (createFactoryViaReflection).
-            // Creating a companion in the IR transformer causes ObjectClassLowering
-            // assertions because the companion needs proper thisReceiver/superTypes setup.
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Skipping factory registration for '${irClass.name}' (no companion object, will use reflection)"
-            )
-            return
-        }
-
-        // NOTE: Companion object creation removed — it caused ObjectClassLowering assertion
-        // failures because the IR companion lacked proper thisReceiver/superTypes setup.
-
-        // Find primary constructor of the model class
-        val modelConstructor = irClass.primaryConstructor
-        if (modelConstructor == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Model class '${irClass.name}' has no primary constructor for factory"
-            )
-            return
-        }
-
-        // Create init block for companion
         val initBlock = irFactory.createAnonymousInitializer(
             startOffset = UNDEFINED_OFFSET,
             endOffset = UNDEFINED_OFFSET,
@@ -320,9 +269,9 @@ class LatticeIrTransformer(
             parent = companion
 
             body = DeclarationIrBuilder(pluginContext, symbol).irBlockBody {
-                // Create KClass reference: MyClass::class
-                val kClassType = pluginContext.irBuiltIns.kClassClass.typeWith(irClass.defaultType)
-                val kClassRef = IrClassReferenceImpl(
+                val kClassType = irBuiltIns.kClassClass.typeWith(irClass.defaultType)
+
+                fun makeKClassRef() = IrClassReferenceImpl(
                     startOffset = UNDEFINED_OFFSET,
                     endOffset = UNDEFINED_OFFSET,
                     type = kClassType,
@@ -330,10 +279,8 @@ class LatticeIrTransformer(
                     classType = irClass.defaultType
                 )
 
-                // Create lambda: { MyClass() }
-                val lambdaType = pluginContext.irBuiltIns.functionN(0).typeWith(irClass.defaultType)
-
-                // Create the lambda function
+                // 1. Lattice.registerFactory(MyClass::class) { MyClass() }
+                val lambdaType = irBuiltIns.functionN(0).typeWith(irClass.defaultType)
                 val lambdaFn = irFactory.createSimpleFunction(
                     startOffset = UNDEFINED_OFFSET,
                     endOffset = UNDEFINED_OFFSET,
@@ -356,40 +303,59 @@ class LatticeIrTransformer(
                         +irReturn(irCallConstructor(modelConstructor.symbol, emptyList()))
                     }
                 }
-
-                // Create function reference expression
-                val lambdaExpr = IrFunctionExpressionImpl(
-                    startOffset = UNDEFINED_OFFSET,
-                    endOffset = UNDEFINED_OFFSET,
-                    type = lambdaType,
-                    function = lambdaFn,
-                    origin = IrStatementOrigin.LAMBDA
-                )
-
-                // Call Lattice.registerFactory(MyClass::class) { MyClass() }
                 +irCall(registerFactoryFn).apply {
-                    // Get the Lattice companion object
-                    val latticeCompanion = latticeClass.owner.declarations
-                        .filterIsInstance<IrClass>()
-                        .find { it.isCompanion }
-                    if (latticeCompanion != null) {
-                        dispatchReceiver = irGetObject(latticeCompanion.symbol)
-                    }
-                    putValueArgument(0, kClassRef)
-                    putValueArgument(1, lambdaExpr)
+                    dispatchReceiver = irGetObject(latticeCompanion.symbol)
+                    typeArguments[0] = irClass.defaultType
+                    putValueArgument(0, makeKClassRef())
+                    putValueArgument(1, IrFunctionExpressionImpl(
+                        UNDEFINED_OFFSET, UNDEFINED_OFFSET, lambdaType, lambdaFn, IrStatementOrigin.LAMBDA
+                    ))
                 }
 
-                // Also register with VirtualModelRegistry for VirtualList type resolution
-                // VirtualModelRegistry.registerTableFactory("ClassName") { ClassName() }
-                if (registerTableFactoryFn != null && virtualModelRegistryClass != null) {
-                    // Create a separate lambda for the VirtualModelRegistry registration
-                    // The return type needs to be LatticeObject for registerTableFactory
-                    val latticeObjectClass = pluginContext.referenceClass(
-                        ClassId.topLevel(FqName("com.lattice.LatticeObject"))
-                    )
-                    if (latticeObjectClass != null) {
-                        val vmrLambdaType = pluginContext.irBuiltIns.functionN(0).typeWith(latticeObjectClass.defaultType)
+                // 2. Lattice.registerHydrationFactory(MyClass::class) { h -> MyClass(h, LatticeHydrationMarker) }
+                if (registerHydrationFactoryFn != null && hydrationConstructor != null && markerSymbol != null) {
+                    val hLambdaType = irBuiltIns.functionN(1).typeWith(irBuiltIns.longType, irClass.defaultType)
+                    val hLambdaFn = irFactory.createSimpleFunction(
+                        startOffset = UNDEFINED_OFFSET,
+                        endOffset = UNDEFINED_OFFSET,
+                        origin = LatticeDeclarationOrigin,
+                        name = Name.special("<anonymous>"),
+                        visibility = DescriptorVisibilities.LOCAL,
+                        isInline = false,
+                        isExpect = false,
+                        returnType = irClass.defaultType,
+                        modality = Modality.FINAL,
+                        symbol = IrSimpleFunctionSymbolImpl(),
+                        isTailrec = false,
+                        isSuspend = false,
+                        isOperator = false,
+                        isInfix = false,
+                        isExternal = false
+                    ).apply {
+                        parent = this@irBlockBody.scope.getLocalDeclarationParent()
+                        val hParam = addValueParameter("handle", irBuiltIns.longType)
+                        body = DeclarationIrBuilder(pluginContext, this.symbol).irBlockBody {
+                            +irReturn(irCallConstructor(hydrationConstructor.symbol, emptyList()).apply {
+                                putValueArgument(0, irGet(hParam))
+                                putValueArgument(1, irGetObject(markerSymbol))
+                            })
+                        }
+                    }
+                    +irCall(registerHydrationFactoryFn).apply {
+                        dispatchReceiver = irGetObject(latticeCompanion.symbol)
+                        typeArguments[0] = irClass.defaultType
+                        putValueArgument(0, makeKClassRef())
+                        putValueArgument(1, IrFunctionExpressionImpl(
+                            UNDEFINED_OFFSET, UNDEFINED_OFFSET, hLambdaType, hLambdaFn, IrStatementOrigin.LAMBDA
+                        ))
+                    }
+                }
 
+                // 3. VirtualModelRegistry registrations
+                val loClass = latticeObjectClass
+                if (virtualModelRegistryClass != null && loClass != null) {
+                    if (registerTableFactoryFn != null) {
+                        val vmrLambdaType = irBuiltIns.functionN(0).typeWith(loClass.defaultType)
                         val vmrLambdaFn = irFactory.createSimpleFunction(
                             startOffset = UNDEFINED_OFFSET,
                             endOffset = UNDEFINED_OFFSET,
@@ -398,7 +364,7 @@ class LatticeIrTransformer(
                             visibility = DescriptorVisibilities.LOCAL,
                             isInline = false,
                             isExpect = false,
-                            returnType = latticeObjectClass.defaultType,
+                            returnType = loClass.defaultType,
                             modality = Modality.FINAL,
                             symbol = IrSimpleFunctionSymbolImpl(),
                             isTailrec = false,
@@ -412,19 +378,49 @@ class LatticeIrTransformer(
                                 +irReturn(irCallConstructor(modelConstructor.symbol, emptyList()))
                             }
                         }
-
-                        val vmrLambdaExpr = IrFunctionExpressionImpl(
-                            startOffset = UNDEFINED_OFFSET,
-                            endOffset = UNDEFINED_OFFSET,
-                            type = vmrLambdaType,
-                            function = vmrLambdaFn,
-                            origin = IrStatementOrigin.LAMBDA
-                        )
-
                         +irCall(registerTableFactoryFn).apply {
                             dispatchReceiver = irGetObject(virtualModelRegistryClass)
-                            putValueArgument(0, irString(irClass.name.asString()))
-                            putValueArgument(1, vmrLambdaExpr)
+                            putValueArgument(0, irString(tableName))
+                            putValueArgument(1, IrFunctionExpressionImpl(
+                                UNDEFINED_OFFSET, UNDEFINED_OFFSET, vmrLambdaType, vmrLambdaFn, IrStatementOrigin.LAMBDA
+                            ))
+                        }
+                    }
+
+                    if (registerTableHydrationFactoryFn != null && hydrationConstructor != null && markerSymbol != null) {
+                        val vmrHLambdaType = irBuiltIns.functionN(1).typeWith(irBuiltIns.longType, loClass.defaultType)
+                        val vmrHLambdaFn = irFactory.createSimpleFunction(
+                            startOffset = UNDEFINED_OFFSET,
+                            endOffset = UNDEFINED_OFFSET,
+                            origin = LatticeDeclarationOrigin,
+                            name = Name.special("<anonymous>"),
+                            visibility = DescriptorVisibilities.LOCAL,
+                            isInline = false,
+                            isExpect = false,
+                            returnType = loClass.defaultType,
+                            modality = Modality.FINAL,
+                            symbol = IrSimpleFunctionSymbolImpl(),
+                            isTailrec = false,
+                            isSuspend = false,
+                            isOperator = false,
+                            isInfix = false,
+                            isExternal = false
+                        ).apply {
+                            parent = this@irBlockBody.scope.getLocalDeclarationParent()
+                            val hParam = addValueParameter("handle", irBuiltIns.longType)
+                            body = DeclarationIrBuilder(pluginContext, this.symbol).irBlockBody {
+                                +irReturn(irCallConstructor(hydrationConstructor.symbol, emptyList()).apply {
+                                    putValueArgument(0, irGet(hParam))
+                                    putValueArgument(1, irGetObject(markerSymbol))
+                                })
+                            }
+                        }
+                        +irCall(registerTableHydrationFactoryFn).apply {
+                            dispatchReceiver = irGetObject(virtualModelRegistryClass)
+                            putValueArgument(0, irString(tableName))
+                            putValueArgument(1, IrFunctionExpressionImpl(
+                                UNDEFINED_OFFSET, UNDEFINED_OFFSET, vmrHLambdaType, vmrHLambdaFn, IrStatementOrigin.LAMBDA
+                            ))
                         }
                     }
                 }
@@ -432,25 +428,17 @@ class LatticeIrTransformer(
         }
 
         companion.declarations.add(initBlock)
-
-        messageCollector.report(
-            CompilerMessageSeverity.WARNING,
-            "Lattice:   Added factory registration to companion object for '${irClass.name}'"
-        )
     }
 
-    private fun findOrCreateHandleField(irClass: IrClass, latticeNativeSymbol: IrClassSymbol): IrField {
-        // Check if field already exists (may have been created by a link from another class)
+    // =========================================================================
+    // Synthetic Fields & Metadata Properties
+    // =========================================================================
+
+    private fun findOrCreateHandleField(irClass: IrClass): IrField {
         val fieldName = "_lattice_handle_field_${irClass.name.asString()}"
-        val existingField = irClass.declarations
-            .filterIsInstance<IrField>()
-            .find { it.name.asString() == fieldName }
+        irClass.declarations.filterIsInstance<IrField>().find { it.name.asString() == fieldName }
+            ?.let { return it }
 
-        if (existingField != null) {
-            return existingField
-        }
-
-        // Create the field
         return irFactory.createField(
             startOffset = UNDEFINED_OFFSET,
             endOffset = UNDEFINED_OFFSET,
@@ -464,36 +452,44 @@ class LatticeIrTransformer(
             isExternal = false
         ).apply {
             parent = irClass
-            // Initialize to 0L - C++ object is created in init block
             initializer = irFactory.createExpressionBody(
                 IrConstImpl.long(UNDEFINED_OFFSET, UNDEFINED_OFFSET, irBuiltIns.longType, 0L)
             )
         }
     }
 
-    private fun implementHandleProperty(irClass: IrClass, property: IrProperty, field: IrField) {
-        // Implement getter body for FIR-generated property
+    private fun implementHandleProperty(property: IrProperty, field: IrField) {
         property.getter?.let { getter ->
             getter.body = DeclarationIrBuilder(pluginContext, getter.symbol).irBlockBody {
                 +irReturn(irGetField(irGet(getter.dispatchReceiverParameter!!), field))
             }
         }
-
-        // Implement setter body for FIR-generated property
         property.setter?.let { setter ->
-            val valueParam = setter.regularParameters.firstOrNull()
-            if (valueParam != null) {
-                setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {
-                    +irSetField(irGet(setter.dispatchReceiverParameter!!), field, irGet(valueParam))
-                }
+            val valueParam = setter.regularParameters.firstOrNull() ?: return@let
+            setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {
+                +irSetField(irGet(setter.dispatchReceiverParameter!!), field, irGet(valueParam))
             }
         }
     }
 
-    private fun implementTableNameProperty(irClass: IrClass, property: IrProperty) {
-        val tableName = irClass.name.asString()
+    private fun resolveModelTableName(irClass: IrClass): String {
+        val ann = irClass.annotations.find {
+            it.type.classOrNull?.owner?.fqNameWhenAvailable == modelAnnotationFqn
+        }
+        val explicit = (ann?.getValueArgument(Name.identifier("tableName")) as? IrConst)?.value as? String
+        return explicit?.takeIf { it.isNotEmpty() } ?: irClass.name.asString()
+    }
 
-        // Implement getter body for FIR-generated property
+    private fun resolveCustomColumnName(prop: IrProperty): String? {
+        val ann = prop.annotations.find {
+            it.type.classOrNull?.owner?.fqNameWhenAvailable == propertyAnnotationFqn
+        } ?: return null
+        val raw = (ann.getValueArgument(Name.identifier("name")) as? IrConst)?.value as? String
+        return raw?.takeIf { it.isNotEmpty() }
+    }
+
+    private fun implementTableNameProperty(irClass: IrClass, property: IrProperty) {
+        val tableName = resolveModelTableName(irClass)
         property.getter?.let { getter ->
             getter.body = DeclarationIrBuilder(pluginContext, getter.symbol).irBlockBody {
                 +irReturn(irString(tableName))
@@ -501,36 +497,163 @@ class LatticeIrTransformer(
         }
     }
 
-    /**
-     * Add an init block that:
-     * 1. Creates C++ object with schema using createObjectWithSchema
-     * 2. Copies initial property values from backing fields to C++
-     */
+    // =========================================================================
+    // @Union Compile-Time Introspection
+    // =========================================================================
+
+    private data class UnionParamInfo(
+        val kotlinPropName: String,
+        val wireParamName: String,
+        val uvKey: String,
+        val paramType: IrType,
+        val sqlTypeOrd: Int,
+        val isLink: Boolean,
+        val linkTarget: String?
+    )
+
+    private data class UnionCaseInfo(
+        val caseClass: IrClass,
+        val caseName: String,
+        val isObject: Boolean,
+        val params: List<UnionParamInfo>
+    )
+
+    private data class UnionMeta(
+        val unionClass: IrClass,
+        val unionTableName: String,
+        val cases: List<UnionCaseInfo>
+    ) {
+        fun encodeSpec(): String {
+            val casesPart = cases.joinToString(";") { c ->
+                if (c.params.isEmpty()) {
+                    c.caseName
+                } else {
+                    c.caseName + "~" + c.params.joinToString("~") { p ->
+                        "${p.wireParamName}^${p.sqlTypeOrd}^${if (p.isLink) "1" else "0"}^${p.linkTarget ?: ""}"
+                    }
+                }
+            }
+            return "$unionTableName|$casesPart"
+        }
+    }
+
+    private fun isUnionType(type: IrType): Boolean {
+        val base = if (type.isNullable()) type.makeNotNull() else type
+        return base.classOrNull?.owner?.hasAnnotation(unionAnnotationFqn) == true
+    }
+
+    private fun findUnionSubclasses(unionClass: IrClass): List<IrClass> {
+        val fromSealed = unionClass.sealedSubclasses.map { it.owner }
+        if (fromSealed.isNotEmpty()) return fromSealed
+
+        val candidates = LinkedHashSet<IrClass>()
+        fun collectFrom(classes: Iterable<IrClass>) {
+            for (cls in classes) {
+                if (!cls.isInterface &&
+                    cls.modality != Modality.ABSTRACT &&
+                    cls.modality != Modality.SEALED &&
+                    cls.superTypes.any { it.classOrNull == unionClass.symbol }
+                ) {
+                    candidates.add(cls)
+                }
+                collectFrom(cls.declarations.filterIsInstance<IrClass>())
+            }
+        }
+        collectFrom(unionClass.declarations.filterIsInstance<IrClass>())
+        for (file in moduleFragment.files) {
+            collectFrom(file.declarations.filterIsInstance<IrClass>())
+        }
+        return candidates.toList()
+    }
+
+    private fun inspectUnion(unionType: IrType): UnionMeta? {
+        val base = if (unionType.isNullable()) unionType.makeNotNull() else unionType
+        val unionClass = base.classOrNull?.owner ?: return null
+        if (!unionClass.hasAnnotation(unionAnnotationFqn)) return null
+
+        val unionAnn = unionClass.annotations.find {
+            it.type.classOrNull?.owner?.fqNameWhenAvailable == unionAnnotationFqn
+        }
+        val customTable = (unionAnn?.getValueArgument(Name.identifier("tableName")) as? IrConst)?.value as? String
+        val unionTableName = customTable?.takeIf { it.isNotEmpty() } ?: "_${unionClass.name.asString()}"
+
+        val subclasses = findUnionSubclasses(unionClass)
+        val cases = subclasses.map { sub ->
+            val caseAnn = sub.annotations.find {
+                it.type.classOrNull?.owner?.fqNameWhenAvailable == unionCaseAnnotationFqn
+            }
+            val explicitCaseName = (caseAnn?.getValueArgument(Name.identifier("name")) as? IrConst)?.value as? String
+            val caseName = explicitCaseName?.takeIf { it.isNotEmpty() }
+                ?: sub.name.asString().replaceFirstChar { it.lowercaseChar() }
+
+            if (sub.kind == ClassKind.OBJECT) {
+                UnionCaseInfo(sub, caseName, isObject = true, params = emptyList())
+            } else {
+                val ctorParams = sub.primaryConstructor?.regularParameters ?: emptyList()
+                val paramInfos = ctorParams.map { vp ->
+                    val propName = vp.name.asString()
+                    val pType = vp.type
+                    val pBase = if (pType.isNullable()) pType.makeNotNull() else pType
+                    val matchingProp = sub.properties.find { it.name.asString() == propName }
+
+                    val hasUnlabeledAnn = vp.annotations.any {
+                        it.type.classOrNull?.owner?.fqNameWhenAvailable == unlabeledAnnotationFqn
+                    } || (matchingProp?.hasAnnotation(unlabeledAnnotationFqn) == true)
+
+                    val isEmbeddedPayload = pBase.classOrNull?.owner?.hasAnnotation(embeddedAnnotationFqn) == true
+                    val isUnlabeledSingle = (ctorParams.size == 1) &&
+                        (hasUnlabeledAnn || (isEmbeddedPayload && (propName == "value" || propName == "_0")))
+
+                    val wireParamName = if (isUnlabeledSingle) "" else propName
+                    val uvKey = wireParamName.ifEmpty { "_0" }
+
+                    val isLink = pBase.classOrNull?.owner?.hasAnnotation(modelAnnotationFqn) == true
+                    val linkTarget = if (isLink) resolveModelTableName(pBase.classOrNull!!.owner) else null
+
+                    val sqlTypeOrd = when {
+                        isLink -> 2 // TEXT globalId in _UnionTable
+                        pBase.isInt() || pBase.isLong() || pBase.isBoolean() -> 0
+                        pBase.isFloat() || pBase.isDouble() || isInstant(pBase) -> 1
+                        isByteArray(pBase) -> 3
+                        isLatticeEnum(pBase) && getEnumStoreAsOrdinal(pBase) -> 0
+                        else -> 2
+                    }
+
+                    UnionParamInfo(
+                        kotlinPropName = propName,
+                        wireParamName = wireParamName,
+                        uvKey = uvKey,
+                        paramType = pType,
+                        sqlTypeOrd = sqlTypeOrd,
+                        isLink = isLink,
+                        linkTarget = linkTarget
+                    )
+                }
+                UnionCaseInfo(sub, caseName, isObject = false, params = paramInfos)
+            }
+        }
+
+        return UnionMeta(unionClass, unionTableName, cases)
+    }
+
+    // =========================================================================
+    // Init Block & _copyPropertiesToNative
+    // =========================================================================
+
     private fun addInitBlock(
         irClass: IrClass,
         handleField: IrField,
         userProperties: List<IrProperty>,
         latticeNativeSymbol: IrClassSymbol
     ) {
-        val tableName = irClass.name.asString()
-
-        // Find createObjectWithSchema(tableName, schema) to create C++ object with property types
+        val tableName = resolveModelTableName(irClass)
         val createObjectWithSchemaFn = findLatticeNativeFunction(latticeNativeSymbol, "createObjectWithSchema")
-        // Fallback to createObject if createObjectWithSchema not found
         val createObjectFn = createObjectWithSchemaFn
             ?: findLatticeNativeFunction(latticeNativeSymbol, "createObject")
-        if (createObjectFn == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot find LatticeNative.createObject, skipping init block"
-            )
-            return
-        }
+            ?: return
 
-        // Find the _latticeSchema property to pass to createObjectWithSchema
         val schemaProperty = irClass.properties.find { it.name.asString() == "_latticeSchema" }
 
-        // Create anonymous initializer
         val initBlock = irFactory.createAnonymousInitializer(
             startOffset = UNDEFINED_OFFSET,
             endOffset = UNDEFINED_OFFSET,
@@ -541,227 +664,39 @@ class LatticeIrTransformer(
 
             body = DeclarationIrBuilder(pluginContext, symbol).irBlockBody {
                 val thisReceiver = irClass.thisReceiver!!
-
-                // _latticeHandle = LatticeNative.createObjectWithSchema("Trip", _latticeSchema)
-                // Passing schema ensures C++ object has property type info for INSERT
-                val createCall = if (createObjectWithSchemaFn != null && schemaProperty?.getter != null) {
-                    irCall(createObjectWithSchemaFn).apply {
-                        dispatchReceiver = irGetObject(latticeNativeSymbol)
-                        putValueArgument(0, irString(tableName))
-                        putValueArgument(1, irCall(schemaProperty.getter!!).apply {
-                            dispatchReceiver = irGet(thisReceiver)
-                        })
-                    }
-                } else {
-                    irCall(createObjectFn).apply {
-                        dispatchReceiver = irGetObject(latticeNativeSymbol)
-                        putValueArgument(0, irString(tableName))
-                    }
-                }
-                +irSetField(irGet(thisReceiver), handleField, createCall)
-
-                // Copy initial property values from backing fields to C++
-                // Skip link properties and embedded properties - they have special handling
-                userProperties.forEach { prop ->
-                    // Skip link properties
-                    if (prop.hasAnnotation(linkAnnotationFqn) || prop.hasAnnotation(linkListAnnotationFqn)) {
-                        return@forEach
-                    }
-
-                    val backingField = prop.backingField ?: return@forEach
-                    val propName = prop.name.asString()
-                    val propType = backingField.type
-
-                    // Skip LatticeList properties (detected by type)
-                    if (propType.classOrNull?.owner?.name?.asString() == "LatticeList") {
-                        return@forEach
-                    }
-
-                    // Skip VirtualList properties (detected by type)
-                    if (propType.classOrNull?.owner?.name?.asString() == "VirtualList") {
-                        return@forEach
-                    }
-
-                    // Handle native collection properties (List, Set, Map — stored as JSON TEXT)
-                    if (isNativeCollection(propType)) {
-                        val setterName = getCollectionSetterName(propType)
-                        if (setterName != null) {
-                            val collectionSetter = findLatticeNativeFunction(latticeNativeSymbol, setterName)
-                            if (collectionSetter != null) {
-                                val initialValue = irGetField(irGet(thisReceiver), backingField)
-                                +irCall(collectionSetter).apply {
-                                    dispatchReceiver = irGetObject(latticeNativeSymbol)
-                                    putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
-                                    putValueArgument(1, irString(propName))
-                                    putValueArgument(2, initialValue)
-                                }
-                            }
+                +irBlock {
+                    val createCall = if (createObjectWithSchemaFn != null && schemaProperty?.getter != null) {
+                        irCall(createObjectWithSchemaFn).apply {
+                            dispatchReceiver = irGetObject(latticeNativeSymbol)
+                            putValueArgument(0, irString(tableName))
+                            putValueArgument(1, irCall(schemaProperty.getter!!).apply {
+                                dispatchReceiver = irGet(thisReceiver)
+                            })
                         }
-                        return@forEach
-                    }
-
-                    // Skip embedded properties (detected by @Embedded annotation on the type)
-                    val baseType = if (propType.isNullable()) propType.makeNotNull() else propType
-                    val isEmbedded = baseType.classOrNull?.owner?.hasAnnotation(embeddedAnnotationFqn) == true
-                    if (isEmbedded) {
-                        return@forEach
-                    }
-
-                    // Handle enum properties specially (need to convert to string/int)
-                    val isEnum = isLatticeEnum(baseType)
-                    if (isEnum) {
-                        val isNullable = propType.isNullable()
-                        val storeAsOrdinal = getEnumStoreAsOrdinal(baseType)
-                        val enumClass = baseType.classOrNull?.owner
-
-                        if (enumClass != null) {
-                            val initialValue = irGetField(irGet(thisReceiver), backingField)
-
-                            if (isNullable) {
-                                // For nullable enums, only set if not null
-                                val setNull = findLatticeNativeFunction(latticeNativeSymbol, "setNull")
-
-                                if (storeAsOrdinal) {
-                                    val nativeSetter = findLatticeNativeFunction(latticeNativeSymbol, "setInt")
-                                        ?: return@forEach
-                                    val ordinalProp = enumClass.properties.find { it.name.asString() == "ordinal" }
-                                        ?: pluginContext.referenceClass(ClassId.topLevel(FqName("kotlin.Enum")))?.owner?.properties?.find { it.name.asString() == "ordinal" }
-
-                                    if (ordinalProp?.getter != null) {
-                                        val initialVar = irTemporary(initialValue, nameHint = "enumInit")
-                                        +irIfThenElse(
-                                            type = irBuiltIns.unitType,
-                                            condition = irEqualsNull(irGet(initialVar)),
-                                            thenPart = if (setNull != null) {
-                                                irCall(setNull).apply {
-                                                    dispatchReceiver = irGetObject(latticeNativeSymbol)
-                                                    putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
-                                                    putValueArgument(1, irString(propName))
-                                                }
-                                            } else {
-                                                irCall(nativeSetter).apply {
-                                                    dispatchReceiver = irGetObject(latticeNativeSymbol)
-                                                    putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
-                                                    putValueArgument(1, irString(propName))
-                                                    putValueArgument(2, irInt(0))
-                                                }
-                                            },
-                                            elsePart = irCall(nativeSetter).apply {
-                                                dispatchReceiver = irGetObject(latticeNativeSymbol)
-                                                putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
-                                                putValueArgument(1, irString(propName))
-                                                putValueArgument(2, irCall(ordinalProp.getter!!).apply {
-                                                    dispatchReceiver = irGet(initialVar)
-                                                })
-                                            }
-                                        )
-                                    }
-                                } else {
-                                    val nativeSetter = findLatticeNativeFunction(latticeNativeSymbol, "setString")
-                                        ?: return@forEach
-                                    val nameProp = enumClass.properties.find { it.name.asString() == "name" }
-                                        ?: pluginContext.referenceClass(ClassId.topLevel(FqName("kotlin.Enum")))?.owner?.properties?.find { it.name.asString() == "name" }
-
-                                    if (nameProp?.getter != null) {
-                                        val initialVar = irTemporary(initialValue, nameHint = "enumInit")
-                                        +irIfThenElse(
-                                            type = irBuiltIns.unitType,
-                                            condition = irEqualsNull(irGet(initialVar)),
-                                            thenPart = if (setNull != null) {
-                                                irCall(setNull).apply {
-                                                    dispatchReceiver = irGetObject(latticeNativeSymbol)
-                                                    putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
-                                                    putValueArgument(1, irString(propName))
-                                                }
-                                            } else {
-                                                irCall(nativeSetter).apply {
-                                                    dispatchReceiver = irGetObject(latticeNativeSymbol)
-                                                    putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
-                                                    putValueArgument(1, irString(propName))
-                                                    putValueArgument(2, irString("")
-                                                    )
-                                                }
-                                            },
-                                            elsePart = irCall(nativeSetter).apply {
-                                                dispatchReceiver = irGetObject(latticeNativeSymbol)
-                                                putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
-                                                putValueArgument(1, irString(propName))
-                                                putValueArgument(2, irCall(nameProp.getter!!).apply {
-                                                    dispatchReceiver = irGet(initialVar)
-                                                })
-                                            }
-                                        )
-                                    }
-                                }
-                            } else {
-                                // Non-nullable enum - just set the value
-                                if (storeAsOrdinal) {
-                                    val nativeSetter = findLatticeNativeFunction(latticeNativeSymbol, "setInt")
-                                        ?: return@forEach
-                                    val ordinalProp = enumClass.properties.find { it.name.asString() == "ordinal" }
-                                        ?: pluginContext.referenceClass(ClassId.topLevel(FqName("kotlin.Enum")))?.owner?.properties?.find { it.name.asString() == "ordinal" }
-
-                                    if (ordinalProp?.getter != null) {
-                                        +irCall(nativeSetter).apply {
-                                            dispatchReceiver = irGetObject(latticeNativeSymbol)
-                                            putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
-                                            putValueArgument(1, irString(propName))
-                                            putValueArgument(2, irCall(ordinalProp.getter!!).apply {
-                                                dispatchReceiver = initialValue
-                                            })
-                                        }
-                                    }
-                                } else {
-                                    val nativeSetter = findLatticeNativeFunction(latticeNativeSymbol, "setString")
-                                        ?: return@forEach
-                                    val nameProp = enumClass.properties.find { it.name.asString() == "name" }
-                                        ?: pluginContext.referenceClass(ClassId.topLevel(FqName("kotlin.Enum")))?.owner?.properties?.find { it.name.asString() == "name" }
-
-                                    if (nameProp?.getter != null) {
-                                        +irCall(nativeSetter).apply {
-                                            dispatchReceiver = irGetObject(latticeNativeSymbol)
-                                            putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
-                                            putValueArgument(1, irString(propName))
-                                            putValueArgument(2, irCall(nameProp.getter!!).apply {
-                                                dispatchReceiver = initialValue
-                                            })
-                                        }
-                                    }
-                                }
-                            }
+                    } else {
+                        irCall(createObjectFn).apply {
+                            dispatchReceiver = irGetObject(latticeNativeSymbol)
+                            putValueArgument(0, irString(tableName))
                         }
-                        return@forEach
                     }
+                    +irSetField(irGet(thisReceiver), handleField, createCall)
 
-                    val nativeSetterName = getNativeSetterName(propType)
-                    val nativeSetter = findLatticeNativeFunction(latticeNativeSymbol, nativeSetterName)
-                        ?: return@forEach
-
-                    // Read initial value from backing field
-                    val initialValue = irGetField(irGet(thisReceiver), backingField)
-
-                    // LatticeNative.setXxx(_latticeHandle, "propName", initialValue)
-                    +irCall(nativeSetter).apply {
-                        dispatchReceiver = irGetObject(latticeNativeSymbol)
-                        putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
-                        putValueArgument(1, irString(propName))
-                        putValueArgument(2, initialValue)
-                    }
+                    emitCopyBackingFieldsToHandle(
+                        builder = this@irBlockBody,
+                        blockBuilder = this,
+                        thisReceiver = thisReceiver,
+                        targetHandleExpr = { irGetField(irGet(thisReceiver), handleField) },
+                        userProperties = userProperties,
+                        latticeNativeSymbol = latticeNativeSymbol
+                    )
                 }
             }
         }
 
-        // Add to class declarations
         irClass.declarations.add(initBlock)
-
-        messageCollector.report(
-            CompilerMessageSeverity.WARNING,
-            "Lattice:   Added init block to create C++ object with schema for '${irClass.name}'"
-        )
     }
 
     private fun implementCopyToNativeFunction(
-        irClass: IrClass,
         function: IrSimpleFunction,
         userProperties: List<IrProperty>,
         latticeNativeSymbol: IrClassSymbol
@@ -770,392 +705,312 @@ class LatticeIrTransformer(
 
         function.body = DeclarationIrBuilder(pluginContext, function.symbol).irBlockBody {
             val thisReceiver = function.dispatchReceiverParameter!!
-
-            // For each property, read from backing field and call LatticeNative setter
-            // Skip links, link lists, and embedded properties
-            userProperties.forEach { prop ->
-                // Skip link properties
-                if (prop.hasAnnotation(linkAnnotationFqn) || prop.hasAnnotation(linkListAnnotationFqn)) {
-                    return@forEach
-                }
-
-                val backingField = prop.backingField ?: return@forEach
-                val propName = prop.name.asString()
-                val propType = backingField.type
-
-                // Skip LatticeList properties
-                if (propType.classOrNull?.owner?.name?.asString() == "LatticeList") {
-                    return@forEach
-                }
-
-                // Skip VirtualList properties
-                if (propType.classOrNull?.owner?.name?.asString() == "VirtualList") {
-                    return@forEach
-                }
-
-                // Handle native collection properties (List, Set, Map — stored as JSON TEXT)
-                if (isNativeCollection(propType)) {
-                    val setterName = getCollectionSetterName(propType)
-                    if (setterName != null) {
-                        val collectionSetter = findLatticeNativeFunction(latticeNativeSymbol, setterName)
-                        if (collectionSetter != null) {
-                            val fieldValue = irGetField(irGet(thisReceiver), backingField)
-                            +irCall(collectionSetter).apply {
-                                dispatchReceiver = irGetObject(latticeNativeSymbol)
-                                putValueArgument(0, irGet(nativeHandleParam))
-                                putValueArgument(1, irString(propName))
-                                putValueArgument(2, fieldValue)
-                            }
-                        }
-                    }
-                    return@forEach
-                }
-
-                // Skip embedded properties
-                val baseType = if (propType.isNullable()) propType.makeNotNull() else propType
-                val isEmbedded = baseType.classOrNull?.owner?.hasAnnotation(embeddedAnnotationFqn) == true
-                if (isEmbedded) {
-                    return@forEach
-                }
-
-                // Handle enum properties specially
-                val isEnum = isLatticeEnum(baseType)
-                if (isEnum) {
-                    val isNullable = propType.isNullable()
-                    val storeAsOrdinal = getEnumStoreAsOrdinal(baseType)
-                    val enumClass = baseType.classOrNull?.owner
-
-                    if (enumClass != null) {
-                        val fieldValue = irGetField(irGet(thisReceiver), backingField)
-
-                        if (storeAsOrdinal) {
-                            val nativeSetter = findLatticeNativeFunction(latticeNativeSymbol, "setInt")
-                                ?: return@forEach
-                            val ordinalProp = enumClass.properties.find { it.name.asString() == "ordinal" }
-                                ?: pluginContext.referenceClass(ClassId.topLevel(FqName("kotlin.Enum")))?.owner?.properties?.find { it.name.asString() == "ordinal" }
-
-                            if (ordinalProp?.getter != null) {
-                                if (isNullable) {
-                                    val valueVar = irTemporary(fieldValue, nameHint = "enumVal")
-                                    val setNull = findLatticeNativeFunction(latticeNativeSymbol, "setNull")
-                                    +irIfThenElse(
-                                        type = irBuiltIns.unitType,
-                                        condition = irEqualsNull(irGet(valueVar)),
-                                        thenPart = if (setNull != null) {
-                                            irCall(setNull).apply {
-                                                dispatchReceiver = irGetObject(latticeNativeSymbol)
-                                                putValueArgument(0, irGet(nativeHandleParam))
-                                                putValueArgument(1, irString(propName))
-                                            }
-                                        } else {
-                                            irCall(nativeSetter).apply {
-                                                dispatchReceiver = irGetObject(latticeNativeSymbol)
-                                                putValueArgument(0, irGet(nativeHandleParam))
-                                                putValueArgument(1, irString(propName))
-                                                putValueArgument(2, irInt(0))
-                                            }
-                                        },
-                                        elsePart = irCall(nativeSetter).apply {
-                                            dispatchReceiver = irGetObject(latticeNativeSymbol)
-                                            putValueArgument(0, irGet(nativeHandleParam))
-                                            putValueArgument(1, irString(propName))
-                                            putValueArgument(2, irCall(ordinalProp.getter!!).apply {
-                                                dispatchReceiver = irGet(valueVar)
-                                            })
-                                        }
-                                    )
-                                } else {
-                                    +irCall(nativeSetter).apply {
-                                        dispatchReceiver = irGetObject(latticeNativeSymbol)
-                                        putValueArgument(0, irGet(nativeHandleParam))
-                                        putValueArgument(1, irString(propName))
-                                        putValueArgument(2, irCall(ordinalProp.getter!!).apply {
-                                            dispatchReceiver = fieldValue
-                                        })
-                                    }
-                                }
-                            }
-                        } else {
-                            val nativeSetter = findLatticeNativeFunction(latticeNativeSymbol, "setString")
-                                ?: return@forEach
-                            val nameProp = enumClass.properties.find { it.name.asString() == "name" }
-                                ?: pluginContext.referenceClass(ClassId.topLevel(FqName("kotlin.Enum")))?.owner?.properties?.find { it.name.asString() == "name" }
-
-                            if (nameProp?.getter != null) {
-                                if (isNullable) {
-                                    val valueVar = irTemporary(fieldValue, nameHint = "enumVal")
-                                    val setNull = findLatticeNativeFunction(latticeNativeSymbol, "setNull")
-                                    +irIfThenElse(
-                                        type = irBuiltIns.unitType,
-                                        condition = irEqualsNull(irGet(valueVar)),
-                                        thenPart = if (setNull != null) {
-                                            irCall(setNull).apply {
-                                                dispatchReceiver = irGetObject(latticeNativeSymbol)
-                                                putValueArgument(0, irGet(nativeHandleParam))
-                                                putValueArgument(1, irString(propName))
-                                            }
-                                        } else {
-                                            irCall(nativeSetter).apply {
-                                                dispatchReceiver = irGetObject(latticeNativeSymbol)
-                                                putValueArgument(0, irGet(nativeHandleParam))
-                                                putValueArgument(1, irString(propName))
-                                                putValueArgument(2, irString("")
-                                                )
-                                            }
-                                        },
-                                        elsePart = irCall(nativeSetter).apply {
-                                            dispatchReceiver = irGetObject(latticeNativeSymbol)
-                                            putValueArgument(0, irGet(nativeHandleParam))
-                                            putValueArgument(1, irString(propName))
-                                            putValueArgument(2, irCall(nameProp.getter!!).apply {
-                                                dispatchReceiver = irGet(valueVar)
-                                            })
-                                        }
-                                    )
-                                } else {
-                                    +irCall(nativeSetter).apply {
-                                        dispatchReceiver = irGetObject(latticeNativeSymbol)
-                                        putValueArgument(0, irGet(nativeHandleParam))
-                                        putValueArgument(1, irString(propName))
-                                        putValueArgument(2, irCall(nameProp.getter!!).apply {
-                                            dispatchReceiver = fieldValue
-                                        })
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    return@forEach
-                }
-
-                val nativeSetterName = getNativeSetterName(propType)
-                val nativeSetter = findLatticeNativeFunction(latticeNativeSymbol, nativeSetterName)
-                    ?: return@forEach
-
-                // Read from backing field (unmanaged value)
-                val fieldValue = irGetField(irGet(thisReceiver), backingField)
-
-                // Call LatticeNative.setXxx(nativeHandle, propertyName, value)
-                +irCall(nativeSetter).apply {
-                    dispatchReceiver = irGetObject(latticeNativeSymbol)
-                    putValueArgument(0, irGet(nativeHandleParam))
-                    putValueArgument(1, irString(propName))
-                    putValueArgument(2, fieldValue)
-                }
+            +irBlock {
+                emitCopyBackingFieldsToHandle(
+                    builder = this@irBlockBody,
+                    blockBuilder = this,
+                    thisReceiver = thisReceiver,
+                    targetHandleExpr = { irGet(nativeHandleParam) },
+                    userProperties = userProperties,
+                    latticeNativeSymbol = latticeNativeSymbol
+                )
             }
         }
     }
 
+    private fun emitCopyBackingFieldsToHandle(
+        builder: IrBuilderWithScope,
+        blockBuilder: IrBlockBuilder,
+        thisReceiver: IrValueParameter,
+        targetHandleExpr: () -> IrExpression,
+        userProperties: List<IrProperty>,
+        latticeNativeSymbol: IrClassSymbol
+    ) = with(blockBuilder) {
+        userProperties.forEach { prop ->
+            if (prop.hasAnnotation(linkAnnotationFqn) || prop.hasAnnotation(linkListAnnotationFqn)) {
+                return@forEach
+            }
+            val backingField = prop.backingField ?: return@forEach
+            val propName = prop.name.asString()
+            val propType = backingField.type
+
+            val typeSimpleName = propType.classOrNull?.owner?.name?.asString()
+            if (typeSimpleName == "LatticeList" || typeSimpleName == "VirtualList") {
+                return@forEach
+            }
+
+            if (isNativeCollection(propType)) {
+                val callExpr = buildCollectionSetCall(
+                    builder = builder,
+                    handleExpr = targetHandleExpr(),
+                    propertyName = propName,
+                    propertyType = propType,
+                    valueExpr = irGetField(irGet(thisReceiver), backingField),
+                    latticeNativeSymbol = latticeNativeSymbol
+                )
+                if (callExpr != null) +callExpr
+                return@forEach
+            }
+
+            val baseType = if (propType.isNullable()) propType.makeNotNull() else propType
+
+            if (isUnionType(baseType)) {
+                val unionMeta = inspectUnion(baseType)
+                if (unionMeta != null) {
+                    emitSetUnionStatements(
+                        blockBuilder = this,
+                        handleExpr = targetHandleExpr,
+                        propertyName = propName,
+                        propertyType = propType,
+                        valueExpr = irGetField(irGet(thisReceiver), backingField),
+                        unionMeta = unionMeta,
+                        latticeNativeSymbol = latticeNativeSymbol
+                    )
+                }
+                return@forEach
+            }
+
+            val isEmbedded = baseType.classOrNull?.owner?.hasAnnotation(embeddedAnnotationFqn) == true
+            if (isEmbedded) {
+                val setEmbedded = findLatticeNativeFunction(latticeNativeSymbol, "setEmbedded")
+                if (setEmbedded != null && baseType.classOrNull != null) {
+                    val kClassType = irBuiltIns.kClassClass.typeWith(baseType)
+                    val kClassRef = IrClassReferenceImpl(
+                        UNDEFINED_OFFSET, UNDEFINED_OFFSET, kClassType, baseType.classOrNull!!, baseType
+                    )
+                    +irCall(setEmbedded).apply {
+                        dispatchReceiver = irGetObject(latticeNativeSymbol)
+                        typeArguments[0] = baseType
+                        putValueArgument(0, targetHandleExpr())
+                        putValueArgument(1, irString(propName))
+                        putValueArgument(2, irGetField(irGet(thisReceiver), backingField))
+                        putValueArgument(3, kClassRef)
+                    }
+                }
+                return@forEach
+            }
+
+            if (isLatticeEnum(baseType)) {
+                val isNullable = propType.isNullable()
+                val storeAsOrdinal = getEnumStoreAsOrdinal(baseType)
+                val enumClass = baseType.classOrNull?.owner ?: return@forEach
+                val fieldValue = irGetField(irGet(thisReceiver), backingField)
+
+                if (storeAsOrdinal) {
+                    val nativeSetter = findLatticeNativeFunction(latticeNativeSymbol, "setInt") ?: return@forEach
+                    val ordinalProp = enumClass.properties.find { it.name.asString() == "ordinal" }
+                        ?: pluginContext.referenceClass(ClassId.topLevel(FqName("kotlin.Enum")))
+                            ?.owner?.properties?.find { it.name.asString() == "ordinal" }
+                    if (ordinalProp?.getter != null) {
+                        if (isNullable) {
+                            val valueVar = irTemporary(fieldValue, nameHint = "enumVal")
+                            val setNull = findLatticeNativeFunction(latticeNativeSymbol, "setNull")
+                            +irIfThenElse(
+                                type = irBuiltIns.unitType,
+                                condition = irEqualsNull(irGet(valueVar)),
+                                thenPart = if (setNull != null) {
+                                    irCall(setNull).apply {
+                                        dispatchReceiver = irGetObject(latticeNativeSymbol)
+                                        putValueArgument(0, targetHandleExpr())
+                                        putValueArgument(1, irString(propName))
+                                    }
+                                } else {
+                                    irCall(nativeSetter).apply {
+                                        dispatchReceiver = irGetObject(latticeNativeSymbol)
+                                        putValueArgument(0, targetHandleExpr())
+                                        putValueArgument(1, irString(propName))
+                                        putValueArgument(2, irInt(0))
+                                    }
+                                },
+                                elsePart = irCall(nativeSetter).apply {
+                                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                                    putValueArgument(0, targetHandleExpr())
+                                    putValueArgument(1, irString(propName))
+                                    putValueArgument(2, irCall(ordinalProp.getter!!).apply {
+                                        dispatchReceiver = irGet(valueVar)
+                                    })
+                                }
+                            )
+                        } else {
+                            +irCall(nativeSetter).apply {
+                                dispatchReceiver = irGetObject(latticeNativeSymbol)
+                                putValueArgument(0, targetHandleExpr())
+                                putValueArgument(1, irString(propName))
+                                putValueArgument(2, irCall(ordinalProp.getter!!).apply {
+                                    dispatchReceiver = fieldValue
+                                })
+                            }
+                        }
+                    }
+                } else {
+                    val nativeSetter = findLatticeNativeFunction(latticeNativeSymbol, "setString") ?: return@forEach
+                    val nameProp = enumClass.properties.find { it.name.asString() == "name" }
+                        ?: pluginContext.referenceClass(ClassId.topLevel(FqName("kotlin.Enum")))
+                            ?.owner?.properties?.find { it.name.asString() == "name" }
+                    if (nameProp?.getter != null) {
+                        if (isNullable) {
+                            val valueVar = irTemporary(fieldValue, nameHint = "enumVal")
+                            val setNull = findLatticeNativeFunction(latticeNativeSymbol, "setNull")
+                            +irIfThenElse(
+                                type = irBuiltIns.unitType,
+                                condition = irEqualsNull(irGet(valueVar)),
+                                thenPart = if (setNull != null) {
+                                    irCall(setNull).apply {
+                                        dispatchReceiver = irGetObject(latticeNativeSymbol)
+                                        putValueArgument(0, targetHandleExpr())
+                                        putValueArgument(1, irString(propName))
+                                    }
+                                } else {
+                                    irCall(nativeSetter).apply {
+                                        dispatchReceiver = irGetObject(latticeNativeSymbol)
+                                        putValueArgument(0, targetHandleExpr())
+                                        putValueArgument(1, irString(propName))
+                                        putValueArgument(2, irString(""))
+                                    }
+                                },
+                                elsePart = irCall(nativeSetter).apply {
+                                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                                    putValueArgument(0, targetHandleExpr())
+                                    putValueArgument(1, irString(propName))
+                                    putValueArgument(2, irCall(nameProp.getter!!).apply {
+                                        dispatchReceiver = irGet(valueVar)
+                                    })
+                                }
+                            )
+                        } else {
+                            +irCall(nativeSetter).apply {
+                                dispatchReceiver = irGetObject(latticeNativeSymbol)
+                                putValueArgument(0, targetHandleExpr())
+                                putValueArgument(1, irString(propName))
+                                putValueArgument(2, irCall(nameProp.getter!!).apply {
+                                    dispatchReceiver = fieldValue
+                                })
+                            }
+                        }
+                    }
+                }
+                return@forEach
+            }
+
+            val nativeSetterName = getNativeSetterName(propType)
+            val nativeSetter = findLatticeNativeFunction(latticeNativeSymbol, nativeSetterName) ?: return@forEach
+            +irCall(nativeSetter).apply {
+                dispatchReceiver = irGetObject(latticeNativeSymbol)
+                putValueArgument(0, targetHandleExpr())
+                putValueArgument(1, irString(propName))
+                putValueArgument(2, irGetField(irGet(thisReceiver), backingField))
+            }
+        }
+    }
+
+    // =========================================================================
+    // Schema Descriptor Generation (`_latticeSchema`)
+    // =========================================================================
+
+    private fun extractUniqueArgs(prop: IrProperty): Pair<List<String>, Boolean> {
+        val ann = prop.annotations.find {
+            it.type.classOrNull?.owner?.fqNameWhenAvailable == uniqueAnnotationFqn
+        } ?: return emptyList<String>() to false
+
+        val allowsUpsert = (ann.getValueArgument(Name.identifier("allowsUpsert")) as? IrConst)?.value as? Boolean ?: false
+        val compArg = ann.getValueArgument(Name.identifier("compoundedWith"))
+        val compounded = when (compArg) {
+            is IrVararg -> compArg.elements.mapNotNull { (it as? IrConst)?.value as? String }.filter { it.isNotEmpty() }
+            else -> emptyList()
+        }
+        return compounded to allowsUpsert
+    }
+
     private fun implementSchemaProperty(
-        irClass: IrClass,
         property: IrProperty,
-        userProperties: List<IrProperty>
+        userProperties: List<IrProperty>,
+        latticeNativeSymbol: IrClassSymbol
     ) {
-        val descriptorClass = latticePropertyDescriptorClass
-        if (descriptorClass == null) {
-            messageCollector.report(CompilerMessageSeverity.WARNING, "Lattice: Cannot find LatticePropertyDescriptor class — _latticeSchema will be empty")
-            return
-        }
-        val typeClass = latticeTypeClass
-        if (typeClass == null) {
-            messageCollector.report(CompilerMessageSeverity.WARNING, "Lattice: Cannot find LatticeType enum — _latticeSchema will be empty")
-            return
-        }
-        val kindClass = latticePropertyKindClass
-        if (kindClass == null) {
-            messageCollector.report(CompilerMessageSeverity.WARNING, "Lattice: Cannot find LatticePropertyKind enum — _latticeSchema will be empty")
-            return
-        }
-
-        // Find the LatticePropertyDescriptor primary constructor
-        val descriptorConstructor = descriptorClass.owner.constructors.find { it.isPrimary }
-            ?: descriptorClass.owner.constructors.firstOrNull()
-        if (descriptorConstructor == null) {
-            messageCollector.report(CompilerMessageSeverity.WARNING, "Lattice: Cannot find LatticePropertyDescriptor constructor — _latticeSchema will be empty")
-            return
-        }
-
-        // Find enum entries for LatticeType
-        fun getTypeEnumEntry(name: String): IrEnumEntry? =
-            typeClass.owner.declarations.filterIsInstance<IrEnumEntry>()
-                .find { it.name.asString() == name }
-
-        // Find enum entries for LatticePropertyKind
-        fun getKindEnumEntry(name: String): IrEnumEntry? =
-            kindClass.owner.declarations.filterIsInstance<IrEnumEntry>()
-                .find { it.name.asString() == name }
-
-        messageCollector.report(CompilerMessageSeverity.WARNING,
-            "Lattice: implementSchemaProperty getter=${property.getter != null} isFakeOverride=${property.isFakeOverride} getterFakeOverride=${property.getter?.isFakeOverride} userProps=${userProperties.size}")
-
         property.getter?.let { getter ->
-            // Set origin so JVM backend generates a real method body
             getter.origin = LatticeDeclarationOrigin
             property.origin = LatticeDeclarationOrigin
             getter.body = DeclarationIrBuilder(pluginContext, getter.symbol).irBlockBody {
+                val buildFn = findLatticeNativeFunction(latticeNativeSymbol, "buildSchemaFromString")
 
-                // Build list of LatticePropertyDescriptor
-                val descriptors = userProperties.mapNotNull { prop ->
-                    val backingField = prop.backingField ?: return@mapNotNull null
-                    val propName = prop.name.asString()
-                    val propType = backingField.type
-                    val isNullable = propType.isNullable()
+                if (userProperties.isNotEmpty() && buildFn != null) {
+                    val schemaStr = userProperties.mapNotNull { prop ->
+                        val bf = prop.backingField ?: return@mapNotNull null
+                        val pt = bf.type
+                        val isNullable = pt.isNullable()
+                        val baseForType = if (isNullable) pt.makeNotNull() else pt
 
-                    // Check if this is a @Link property, LatticeList type, or VirtualList type
-                    val isLink = prop.hasAnnotation(linkAnnotationFqn)
-                    val isVirtualList = propType.classOrNull?.owner?.name?.asString() == "VirtualList"
-                    val isLinkList = prop.hasAnnotation(linkListAnnotationFqn) ||
-                        propType.classOrNull?.owner?.name?.asString() == "LatticeList"
+                        val isLink = prop.hasAnnotation(linkAnnotationFqn)
+                        val isLinkList = prop.hasAnnotation(linkListAnnotationFqn) ||
+                            pt.classOrNull?.owner?.name?.asString() == "LatticeList"
+                        val isVirtualList = pt.classOrNull?.owner?.name?.asString() == "VirtualList"
+                        val isUnion = isUnionType(baseForType)
+                        val isVector = isFloatVector(baseForType) || isDoubleVector(baseForType)
+                        val isGeo = isGeoBounds(baseForType)
 
-                    // Determine the property kind and target table
-                    val kindName: String
-                    var targetTableName: String? = null
-
-                    if (isLink) {
-                        kindName = "LINK"
-                        // Extract target table name from property type
-                        val baseType = if (isNullable) propType.makeNotNull() else propType
-                        val targetClass = baseType.classOrNull?.owner
-                        targetTableName = targetClass?.name?.asString()
-                    } else if (isVirtualList) {
-                        kindName = "VIRTUAL_LIST"
-                        // VirtualList has no single target table — empty target, parent class as link table
-                        targetTableName = null
-                    } else if (isLinkList) {
-                        kindName = "LINK_LIST"
-                        // Extract element type from LatticeList<T>
-                        val listType = propType
-                        if (listType is org.jetbrains.kotlin.ir.types.IrSimpleType) {
-                            val elementType = listType.arguments.firstOrNull()?.typeOrNull
-                            val elementClass = elementType?.classOrNull?.owner
-                            targetTableName = elementClass?.name?.asString()
+                        val typeOrd = when {
+                            isLink || isLinkList || isVirtualList -> 0
+                            isUnion -> 2 // TEXT globalId pointing into _UnionTable
+                            pt.isString() || (isNullable && baseForType.isString()) -> 2
+                            pt.isInt() || (isNullable && baseForType.isInt()) -> 0
+                            pt.isLong() || (isNullable && baseForType.isLong()) -> 0
+                            pt.isBoolean() || (isNullable && baseForType.isBoolean()) -> 0
+                            pt.isFloat() || (isNullable && baseForType.isFloat()) -> 1
+                            pt.isDouble() || (isNullable && baseForType.isDouble()) -> 1
+                            isGeo -> 1
+                            isByteArray(baseForType) || isVector -> 3
+                            isInstant(baseForType) -> 1
+                            isUuid(baseForType) -> 2
+                            isLatticeEnum(baseForType) -> if (getEnumStoreAsOrdinal(baseForType)) 0 else 2
+                            else -> 2
                         }
-                    } else {
-                        kindName = "PRIMITIVE"
-                    }
 
-                    // Determine LatticeType based on property type
-                    val baseForType = if (isNullable) propType.makeNotNull() else propType
-                    val latticeTypeName = when {
-                        isLink || isLinkList || isVirtualList -> "INTEGER" // Links are stored as foreign key IDs
-                        propType.isString() || (isNullable && baseForType.isString()) -> "TEXT"
-                        propType.isInt() || (isNullable && baseForType.isInt()) -> "INTEGER"
-                        propType.isLong() || (isNullable && baseForType.isLong()) -> "INTEGER"
-                        propType.isBoolean() || (isNullable && baseForType.isBoolean()) -> "INTEGER"
-                        propType.isFloat() || (isNullable && baseForType.isFloat()) -> "REAL"
-                        propType.isDouble() || (isNullable && baseForType.isDouble()) -> "REAL"
-                        isByteArray(baseForType) -> "BLOB"
-                        isFloatVector(baseForType) -> "BLOB"
-                        isDoubleVector(baseForType) -> "BLOB"
-                        isInstant(baseForType) -> "REAL"
-                        isUuid(baseForType) -> "TEXT"
-                        isLatticeEnum(baseForType) -> if (getEnumStoreAsOrdinal(baseForType)) "INTEGER" else "TEXT"
-                        else -> "TEXT"
-                    }
+                        val kindOrd = when {
+                            isLink -> 1
+                            isLinkList -> 2
+                            isVirtualList -> 3
+                            isUnion -> 5
+                            else -> 0
+                        }
 
-                    val typeEntry = getTypeEnumEntry(latticeTypeName) ?: return@mapNotNull null
-                    val kindEntry = getKindEnumEntry(kindName) ?: return@mapNotNull null
+                        val targetTable = when {
+                            isLink -> baseForType.classOrNull?.owner?.let { resolveModelTableName(it) }
+                            isLinkList -> (pt as? IrSimpleType)
+                                ?.arguments?.firstOrNull()?.typeOrNull
+                                ?.classOrNull?.owner?.let { resolveModelTableName(it) }
+                            else -> null
+                        } ?: ""
 
-                    // Create LatticePropertyDescriptor(name, type, kind, nullable, targetTable, linkTable)
-                    irCall(descriptorConstructor).apply {
-                        putValueArgument(0, irString(propName))  // name
-                        putValueArgument(1, IrGetEnumValueImpl(
-                            UNDEFINED_OFFSET, UNDEFINED_OFFSET,
-                            typeClass.defaultType,
-                            typeEntry.symbol
-                        ))  // type
-                        putValueArgument(2, IrGetEnumValueImpl(
-                            UNDEFINED_OFFSET, UNDEFINED_OFFSET,
-                            kindClass.defaultType,
-                            kindEntry.symbol
-                        ))  // kind
-                        putValueArgument(3, irBoolean(isNullable))  // nullable
-                        putValueArgument(4, if (targetTableName != null) irString(targetTableName) else irNull())  // targetTable
-                        putValueArgument(5, irNull())  // linkTable
-                    }
-                }
+                        val hasUnique = prop.hasAnnotation(uniqueAnnotationFqn)
+                        val (compoundedWith, allowsUpsert) = if (hasUnique) extractUniqueArgs(prop) else (emptyList<String>() to false)
 
-                messageCollector.report(CompilerMessageSeverity.WARNING,
-                    "Lattice: _latticeSchema descriptors.size=${descriptors.size}")
+                        val flags = (if (hasUnique) FLAG_UNIQUE else 0) or
+                            (if (prop.hasAnnotation(indexedAnnotationFqn)) FLAG_INDEXED else 0) or
+                            (if (prop.hasAnnotation(fullTextAnnotationFqn)) FLAG_FULL_TEXT else 0) or
+                            (if (isVector) FLAG_VECTOR else 0) or
+                            (if (prop.hasAnnotation(noHistoryAnnotationFqn)) FLAG_NO_HISTORY else 0) or
+                            (if (isGeo) FLAG_GEO_BOUNDS else 0) or
+                            (if (allowsUpsert) FLAG_ALLOWS_UPSERT else 0)
 
-                if (descriptors.isNotEmpty()) {
-                    // Build schema as a single compile-time string constant and
-                    // call LatticeNative.buildSchemaFromString() at runtime.
-                    // This avoids all complex IR codegen (constructors, varargs, collections)
-                    // that breaks on JVM/Android.
-                    val buildFn = findLatticeNativeFunction(latticeNativeClass!!, "buildSchemaFromString")
+                        val customCol = resolveCustomColumnName(prop) ?: ""
+                        val compoundedStr = compoundedWith.joinToString("+")
+                        val unionSpec = if (isUnion) inspectUnion(baseForType)?.encodeSpec().orEmpty() else ""
 
-                    if (buildFn != null) {
-                        // Build descriptor string at COMPILE TIME: "name:type:kind:nullable,..."
-                        val schemaStr = userProperties.mapNotNull { prop ->
-                            val bf = prop.backingField ?: return@mapNotNull null
-                            val pt = bf.type
-                            val isNullable = pt.isNullable()
-                            val baseForType = if (isNullable) pt.makeNotNull() else pt
-                            val isLink = prop.hasAnnotation(linkAnnotationFqn)
-                            val isLinkList = prop.hasAnnotation(linkListAnnotationFqn) ||
-                                pt.classOrNull?.owner?.name?.asString() == "LatticeList"
-                            val isVirtualList = pt.classOrNull?.owner?.name?.asString() == "VirtualList"
-                            val typeOrd = when {
-                                isLink || isLinkList || isVirtualList -> 0
-                                pt.isString() || (isNullable && baseForType.isString()) -> 2
-                                pt.isInt() || (isNullable && baseForType.isInt()) -> 0
-                                pt.isLong() || (isNullable && baseForType.isLong()) -> 0
-                                pt.isBoolean() || (isNullable && baseForType.isBoolean()) -> 0
-                                pt.isFloat() || (isNullable && baseForType.isFloat()) -> 1
-                                pt.isDouble() || (isNullable && baseForType.isDouble()) -> 1
-                                isByteArray(baseForType) || isFloatVector(baseForType) || isDoubleVector(baseForType) -> 3
-                                isInstant(baseForType) -> 1
-                                isUuid(baseForType) -> 2
-                                isLatticeEnum(baseForType) -> if (getEnumStoreAsOrdinal(baseForType)) 0 else 2
-                                else -> 2
-                            }
-                            val kindOrd = when {
-                                isLink -> 1; isLinkList -> 2; isVirtualList -> 3; else -> 0
-                            }
-                            // Target table for links / link lists (mirrors the
-                            // descriptor IR path above). Empty string = null.
-                            val targetTable = when {
-                                isLink -> baseForType.classOrNull?.owner?.name?.asString()
-                                isLinkList -> (pt as? org.jetbrains.kotlin.ir.types.IrSimpleType)
-                                    ?.arguments?.firstOrNull()?.typeOrNull
-                                    ?.classOrNull?.owner?.name?.asString()
-                                else -> null
-                            } ?: ""
-                            // Constraint flags as a bitfield. Until now the plugin
-                            // DECLARED @Unique/@Indexed/@FullText but never read them, so
-                            // LatticeCore's CREATE UNIQUE INDEX path could never fire —
-                            // the annotations were silent no-ops all the way down.
-                            val flags = (if (prop.hasAnnotation(uniqueAnnotationFqn)) 1 else 0) or
-                                (if (prop.hasAnnotation(indexedAnnotationFqn)) 2 else 0) or
-                                (if (prop.hasAnnotation(fullTextAnnotationFqn)) 4 else 0)
-                            // Only single-column PRESENCE is carried. Degrading
-                            // @Unique(compoundedWith/allowsUpsert) silently would trade a
-                            // declared compound/upsert constraint for a plain single-column
-                            // one with no diagnostic — say so loudly instead.
-                            warnOnUnsupportedUniqueArgs(prop)
-                            "${prop.name.asString()}:$typeOrd:$kindOrd:${if (isNullable) "1" else "0"}:$targetTable:$flags"
-                        }.joinToString(",")
+                        val baseEntry = "${prop.name.asString()}:$typeOrd:$kindOrd:${if (isNullable) "1" else "0"}:$targetTable:$flags"
+                        if (customCol.isEmpty() && compoundedStr.isEmpty() && unionSpec.isEmpty()) {
+                            baseEntry
+                        } else {
+                            "$baseEntry:$customCol:$compoundedStr:$unionSpec"
+                        }
+                    }.joinToString(",")
 
-                        messageCollector.report(CompilerMessageSeverity.WARNING,
-                            "Lattice: schema string = '$schemaStr'")
-
-                        // Generate: return LatticeNative.buildSchemaFromString("text:2:0:0,createdAt:1:0:0")
-                        +irReturn(irCall(buildFn).apply {
-                            dispatchReceiver = irGetObject(latticeNativeClass!!)
-                            putValueArgument(0, irString(schemaStr))
-                        })
-                    } else {
-                        messageCollector.report(CompilerMessageSeverity.WARNING,
-                            "Lattice: buildSchemaFromString not found on LatticeNative")
-                        +irReturn(irNull())
-                    }
+                    +irReturn(irCall(buildFn).apply {
+                        dispatchReceiver = irGetObject(latticeNativeSymbol)
+                        putValueArgument(0, irString(schemaStr))
+                    })
                 } else {
-                    // Return empty list
                     val emptyList = pluginContext.referenceFunctions(
                         CallableId(FqName("kotlin.collections"), Name.identifier("emptyList"))
                     ).firstOrNull()
-
                     if (emptyList != null) {
                         +irReturn(irCall(emptyList))
                     } else {
@@ -1165,6 +1020,10 @@ class LatticeIrTransformer(
             }
         }
     }
+
+    // =========================================================================
+    // Property Getter/Setter Transformation
+    // =========================================================================
 
     private fun transformProperty(
         irClass: IrClass,
@@ -1176,112 +1035,68 @@ class LatticeIrTransformer(
         val propertyName = property.name.asString()
         val propertyType = backingField.type
 
-        // Keep backing field for initial values (copied to C++ in init block)
-        // Don't rename - it's only used during initialization
-
-        // Check if this is a @Link property, VirtualList type, or LatticeList type
         val isLink = property.hasAnnotation(linkAnnotationFqn)
         val isVirtualList = propertyType.classOrNull?.owner?.name?.asString() == "VirtualList"
         val isLinkList = property.hasAnnotation(linkListAnnotationFqn) ||
             propertyType.classOrNull?.owner?.name?.asString() == "LatticeList"
-
-        // Check if native collection type (List, Set, Map — skip transformation, use backing field)
         val isNativeCollection = isNativeCollection(propertyType)
 
-        // Check if the property type is an @Embedded type
         val baseType = if (propertyType.isNullable()) propertyType.makeNotNull() else propertyType
+        val isUnion = isUnionType(baseType)
         val isEmbedded = baseType.classOrNull?.owner?.hasAnnotation(embeddedAnnotationFqn) == true
-
-        // Check if the property type is a @LatticeEnum type
         val isEnum = isLatticeEnum(baseType)
 
-        if (isNativeCollection) {
-            // Native collections (List, Set, Map) stored as JSON TEXT via KSerializer.
-            // Mirrors Swift PrimitiveProperty conformance for Array/Set/Dictionary.
-            property.getter?.let { getter ->
-                transformCollectionGetter(irClass, getter, handleField, backingField, propertyName, propertyType, latticeNativeSymbol)
+        when {
+            isNativeCollection -> {
+                property.getter?.let { transformCollectionGetter(it, handleField, propertyName, propertyType, latticeNativeSymbol) }
+                property.setter?.let { transformCollectionSetter(it, handleField, propertyName, propertyType, latticeNativeSymbol) }
             }
-            property.setter?.let { setter ->
-                transformCollectionSetter(irClass, setter, handleField, backingField, propertyName, propertyType, latticeNativeSymbol)
+            isLink -> {
+                property.getter?.let { transformLinkGetter(it, handleField, propertyName, propertyType, latticeNativeSymbol) }
+                property.setter?.let { transformLinkSetter(it, handleField, propertyName, propertyType, latticeNativeSymbol) }
             }
-        } else if (isLink) {
-            // Transform as a link property
-            property.getter?.let { getter ->
-                transformLinkGetter(irClass, getter, handleField, propertyName, propertyType, latticeNativeSymbol)
+            isVirtualList -> {
+                property.getter?.let { transformVirtualListGetter(it, handleField, propertyName, propertyType, latticeNativeSymbol) }
+                property.setter?.let { transformVirtualListSetter(it) }
             }
-            property.setter?.let { setter ->
-                transformLinkSetter(irClass, setter, handleField, propertyName, propertyType, latticeNativeSymbol)
+            isLinkList -> {
+                property.getter?.let { transformLinkListGetter(it, handleField, propertyName, propertyType, latticeNativeSymbol) }
+                property.setter?.let { transformLinkListSetter(it) }
             }
-        } else if (isVirtualList) {
-            // Transform as a virtual list property (polymorphic link list)
-            property.getter?.let { getter ->
-                transformVirtualListGetter(irClass, getter, handleField, propertyName, propertyType, latticeNativeSymbol)
+            isUnion -> {
+                val unionMeta = inspectUnion(baseType)
+                if (unionMeta != null) {
+                    property.getter?.let { transformUnionGetter(it, handleField, propertyName, propertyType, unionMeta, latticeNativeSymbol) }
+                    property.setter?.let { transformUnionSetter(it, handleField, propertyName, propertyType, unionMeta, latticeNativeSymbol) }
+                }
             }
-            property.setter?.let { setter ->
-                transformVirtualListSetter(irClass, setter, handleField, propertyName, propertyType, latticeNativeSymbol)
+            isEmbedded -> {
+                property.getter?.let { transformEmbeddedGetter(it, handleField, propertyName, propertyType, latticeNativeSymbol) }
+                property.setter?.let { transformEmbeddedSetter(it, handleField, propertyName, propertyType, latticeNativeSymbol) }
             }
-        } else if (isLinkList) {
-            // Transform as a link list property
-            property.getter?.let { getter ->
-                transformLinkListGetter(irClass, getter, handleField, propertyName, propertyType, latticeNativeSymbol)
+            isEnum -> {
+                property.getter?.let { transformEnumGetter(it, handleField, propertyName, propertyType, latticeNativeSymbol) }
+                property.setter?.let { transformEnumSetter(it, handleField, propertyName, propertyType, latticeNativeSymbol) }
             }
-            property.setter?.let { setter ->
-                transformLinkListSetter(irClass, setter, handleField, propertyName, propertyType, latticeNativeSymbol)
-            }
-        } else if (isEmbedded) {
-            // Transform as an embedded model (stored as JSON)
-            property.getter?.let { getter ->
-                transformEmbeddedGetter(irClass, getter, handleField, propertyName, propertyType, latticeNativeSymbol)
-            }
-            property.setter?.let { setter ->
-                transformEmbeddedSetter(irClass, setter, handleField, propertyName, propertyType, latticeNativeSymbol)
-            }
-        } else if (isEnum) {
-            // Transform as a @LatticeEnum property (stored as TEXT name or INTEGER ordinal)
-            property.getter?.let { getter ->
-                transformEnumGetter(irClass, getter, handleField, propertyName, propertyType, latticeNativeSymbol)
-            }
-            property.setter?.let { setter ->
-                transformEnumSetter(irClass, setter, handleField, propertyName, propertyType, latticeNativeSymbol)
-            }
-        } else {
-            // Transform getter to always delegate to C++
-            property.getter?.let { getter ->
-                transformGetter(irClass, getter, handleField, backingField, propertyName, propertyType, latticeNativeSymbol)
-            }
-
-            // Transform setter to always delegate to C++
-            property.setter?.let { setter ->
-                transformSetter(irClass, setter, handleField, backingField, propertyName, propertyType, latticeNativeSymbol)
+            else -> {
+                property.getter?.let { transformGetter(it, handleField, propertyName, propertyType, latticeNativeSymbol) }
+                property.setter?.let { transformSetter(it, handleField, propertyName, propertyType, latticeNativeSymbol) }
             }
         }
     }
 
     private fun transformGetter(
-        irClass: IrClass,
         getter: IrSimpleFunction,
         handleField: IrField,
-        backingField: IrField,
         propertyName: String,
         propertyType: IrType,
         latticeNativeSymbol: IrClassSymbol
     ) {
         val nativeGetterName = getNativeGetterName(propertyType)
-        val nativeGetter = findLatticeNativeFunction(latticeNativeSymbol, nativeGetterName)
+        val nativeGetter = findLatticeNativeFunction(latticeNativeSymbol, nativeGetterName) ?: return
 
-        if (nativeGetter == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot find LatticeNative.$nativeGetterName for property '$propertyName', skipping transformation"
-            )
-            return
-        }
-
-        // Always delegate to C++ - all storage is in C++ object
         getter.body = DeclarationIrBuilder(pluginContext, getter.symbol).irBlockBody {
             val thisReceiver = getter.dispatchReceiverParameter!!
-
-            // return LatticeNative.getXxx(_latticeHandle, "propertyName")
             +irReturn(
                 irCall(nativeGetter).apply {
                     dispatchReceiver = irGetObject(latticeNativeSymbol)
@@ -1293,32 +1108,18 @@ class LatticeIrTransformer(
     }
 
     private fun transformSetter(
-        irClass: IrClass,
         setter: IrSimpleFunction,
         handleField: IrField,
-        backingField: IrField,
         propertyName: String,
         propertyType: IrType,
         latticeNativeSymbol: IrClassSymbol
     ) {
         val nativeSetterName = getNativeSetterName(propertyType)
-        val nativeSetter = findLatticeNativeFunction(latticeNativeSymbol, nativeSetterName)
-
-        if (nativeSetter == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot find LatticeNative.$nativeSetterName for property '$propertyName', skipping transformation"
-            )
-            return
-        }
-
+        val nativeSetter = findLatticeNativeFunction(latticeNativeSymbol, nativeSetterName) ?: return
         val valueParam = setter.regularParameters.firstOrNull() ?: return
 
-        // Always delegate to C++ - all storage is in C++ object
         setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {
             val thisReceiver = setter.dispatchReceiverParameter!!
-
-            // LatticeNative.setXxx(_latticeHandle, "propertyName", value)
             +irCall(nativeSetter).apply {
                 dispatchReceiver = irGetObject(latticeNativeSymbol)
                 putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
@@ -1328,58 +1129,63 @@ class LatticeIrTransformer(
         }
     }
 
-    /**
-     * Transform a @Link property getter.
-     * Gets the linked object handle from C++ and wraps it in the target type.
-     *
-     * Like Swift's approach:
-     *   let model = Self()
-     *   model._dynamicObject = object.getObject(named: name)
-     *   return model
-     */
+    // =========================================================================
+    // @Link, @LinkList, VirtualList (Zero-Leak Hydration Constructor)
+    // =========================================================================
+
+    private fun buildHydratedModelExpr(
+        builder: IrBuilderWithScope,
+        targetClass: IrClass,
+        handleExpr: () -> IrExpression,
+        latticeNativeSymbol: IrClassSymbol
+    ): IrExpression = with(builder) {
+        val setHandle = findLatticeNativeFunction(latticeNativeSymbol, "setHandle")
+        val hydrationCtor = findHydrationConstructor(targetClass)
+        val markerSym = latticeHydrationMarkerClass
+        val primaryCtor = targetClass.primaryConstructor
+
+        irBlock {
+            val hVar = irTemporary(handleExpr(), nameHint = "h")
+            val instExpr = if (hydrationCtor != null && markerSym != null) {
+                irCallConstructor(hydrationCtor.symbol, emptyList()).apply {
+                    putValueArgument(0, irGet(hVar))
+                    putValueArgument(1, irGetObject(markerSym))
+                }
+            } else {
+                irCallConstructor(primaryCtor!!.symbol, emptyList())
+            }
+            val instVar = irTemporary(instExpr, nameHint = "linkedObj")
+            if (setHandle != null) {
+                +irCall(setHandle).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, irGet(instVar))
+                    putValueArgument(1, irGet(hVar))
+                }
+            }
+            +irGet(instVar)
+        }
+    }
+
     private fun transformLinkGetter(
-        irClass: IrClass,
         getter: IrSimpleFunction,
         handleField: IrField,
         propertyName: String,
         propertyType: IrType,
         latticeNativeSymbol: IrClassSymbol
     ) {
-        val getObjectHandle = findLatticeNativeFunction(latticeNativeSymbol, "getObjectHandle")
-        val setHandle = findLatticeNativeFunction(latticeNativeSymbol, "setHandle")
-        if (getObjectHandle == null || setHandle == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot find LatticeNative functions for link '$propertyName', skipping"
-            )
-            return
-        }
+        val getObjectHandle = findLatticeNativeFunction(latticeNativeSymbol, "getObjectHandle") ?: return
+        val setHandle = findLatticeNativeFunction(latticeNativeSymbol, "setHandle") ?: return
 
-        // Get the target class (unwrap nullable if needed)
         val targetType = if (propertyType.isNullable()) propertyType.makeNotNull() else propertyType
-        val targetClass = targetType.classOrNull?.owner
-        if (targetClass == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot determine target class for link '$propertyName', skipping"
-            )
-            return
-        }
-
-        // Find the primary constructor of the target class
-        val targetConstructor = targetClass.primaryConstructor
-        if (targetConstructor == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Target class '${targetClass.name}' has no primary constructor for link '$propertyName'"
-            )
-            return
-        }
+        val targetClass = targetType.classOrNull?.owner ?: return
+        val hydrationCtor = findHydrationConstructor(targetClass)
+        val markerSym = latticeHydrationMarkerClass
+        val primaryCtor = targetClass.primaryConstructor
+        if (hydrationCtor == null && primaryCtor == null) return
 
         getter.body = DeclarationIrBuilder(pluginContext, getter.symbol).irBlockBody {
             val thisReceiver = getter.dispatchReceiverParameter!!
 
-            // val linkedHandle = LatticeNative.getObjectHandle(_latticeHandle, "propertyName")
             val handleVar = irTemporary(
                 irCall(getObjectHandle).apply {
                     dispatchReceiver = irGetObject(latticeNativeSymbol)
@@ -1389,61 +1195,48 @@ class LatticeIrTransformer(
                 nameHint = "linkedHandle"
             )
 
-            // if (linkedHandle == 0L) return null
             +irIfThen(
                 type = irBuiltIns.unitType,
                 condition = irEquals(irGet(handleVar), irLong(0L)),
                 thenPart = irReturn(irNull())
             )
 
-            // val obj = TargetClass()
-            val instance = irTemporary(
-                irCallConstructor(targetConstructor.symbol, emptyList()),
-                nameHint = "linkedObj"
-            )
+            val instExpr = if (hydrationCtor != null && markerSym != null) {
+                irCallConstructor(hydrationCtor.symbol, emptyList()).apply {
+                    putValueArgument(0, irGet(handleVar))
+                    putValueArgument(1, irGetObject(markerSym))
+                }
+            } else {
+                irCallConstructor(primaryCtor!!.symbol, emptyList())
+            }
 
-            // LatticeNative.setHandle(obj, linkedHandle)
+            val instance = irTemporary(instExpr, nameHint = "linkedObj")
+
             +irCall(setHandle).apply {
                 dispatchReceiver = irGetObject(latticeNativeSymbol)
                 putValueArgument(0, irGet(instance))
                 putValueArgument(1, irGet(handleVar))
             }
 
-            // return obj
             +irReturn(irGet(instance))
         }
     }
 
-    /**
-     * Transform a @Link property setter.
-     * Extracts the handle from the linked object and sets it in C++.
-     */
     private fun transformLinkSetter(
-        irClass: IrClass,
         setter: IrSimpleFunction,
         handleField: IrField,
         propertyName: String,
         propertyType: IrType,
         latticeNativeSymbol: IrClassSymbol
     ) {
-        val setObjectHandle = findLatticeNativeFunction(latticeNativeSymbol, "setObjectHandle")
-        val getHandle = findLatticeNativeFunction(latticeNativeSymbol, "getHandle")
-        if (setObjectHandle == null || getHandle == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot find LatticeNative functions for link setter '$propertyName', skipping"
-            )
-            return
-        }
-
+        val setObjectHandle = findLatticeNativeFunction(latticeNativeSymbol, "setObjectHandle") ?: return
+        val getHandle = findLatticeNativeFunction(latticeNativeSymbol, "getHandle") ?: return
         val valueParam = setter.regularParameters.firstOrNull() ?: return
 
         setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {
             val thisReceiver = setter.dispatchReceiverParameter!!
 
             if (propertyType.isNullable()) {
-                // val linkedHandle = if (value != null) LatticeNative.getHandle(value) else 0L
-                // LatticeNative.setObjectHandle(_latticeHandle, "propertyName", linkedHandle)
                 val linkedHandle = irTemporary(
                     irIfNull(
                         type = irBuiltIns.longType,
@@ -1464,8 +1257,6 @@ class LatticeIrTransformer(
                     putValueArgument(2, irGet(linkedHandle))
                 }
             } else {
-                // val linkedHandle = LatticeNative.getHandle(value)
-                // LatticeNative.setObjectHandle(_latticeHandle, "propertyName", linkedHandle)
                 +irCall(setObjectHandle).apply {
                     dispatchReceiver = irGetObject(latticeNativeSymbol)
                     putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
@@ -1479,410 +1270,553 @@ class LatticeIrTransformer(
         }
     }
 
-    /**
-     * Transform a @LinkList property getter.
-     * Gets the link list from C++ and configures a LatticeList wrapper.
-     *
-     * Generated code:
-     *   val list = LatticeList<T>()
-     *   LatticeNative.configureLinkList(list, _latticeHandle, "propertyName") { T() }
-     *   return list
-     */
     private fun transformLinkListGetter(
-        irClass: IrClass,
         getter: IrSimpleFunction,
         handleField: IrField,
         propertyName: String,
         propertyType: IrType,
         latticeNativeSymbol: IrClassSymbol
     ) {
-        val getLinkListHandle = findLatticeNativeFunction(latticeNativeSymbol, "getLinkListHandle")
-        val setHandle = findLatticeNativeFunction(latticeNativeSymbol, "setHandle")
-        if (getLinkListHandle == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot find LatticeNative.getLinkListHandle for '$propertyName', skipping"
-            )
-            return
-        }
-
-        // Find LatticeList class
-        val latticeListClass = pluginContext.referenceClass(
-            ClassId.topLevel(FqName("com.lattice.LatticeList"))
-        )
-        if (latticeListClass == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot find LatticeList class for '$propertyName', skipping"
-            )
-            return
-        }
-
-        // Get the element type from LatticeList<T>
-        val listTypeArg = propertyType.classOrNull?.typeWith()?.arguments?.firstOrNull()?.typeOrNull
-            ?: run {
-                // Try to extract from the property type directly
-                val classifier = propertyType.classOrNull
-                classifier?.owner?.typeParameters?.firstOrNull()?.let { typeParam ->
-                    // This is a type parameter, need to get actual type argument
-                    propertyType.let { pt ->
-                        if (pt is org.jetbrains.kotlin.ir.types.IrSimpleType) {
-                            pt.arguments.firstOrNull()?.typeOrNull
-                        } else null
-                    }
-                }
-            }
-
-        if (listTypeArg == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot determine element type for link list '$propertyName', skipping"
-            )
-            return
-        }
-
-        val elementClass = listTypeArg.classOrNull?.owner
-        if (elementClass == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot find element class for link list '$propertyName', skipping"
-            )
-            return
-        }
-
-        val elementConstructor = elementClass.primaryConstructor
-        if (elementConstructor == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Element class '${elementClass.name}' has no primary constructor for '$propertyName'"
-            )
-            return
-        }
-
-        // Find LatticeList constructor
-        val latticeListConstructor = latticeListClass.owner.constructors.firstOrNull()
-        if (latticeListConstructor == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot find LatticeList constructor for '$propertyName'"
-            )
-            return
-        }
-
-        // Find _nativeHandle property on LatticeList
-        val nativeHandleProp = latticeListClass.owner.properties.find { it.name.asString() == "_nativeHandle" }
-
-        if (nativeHandleProp == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot find LatticeList._nativeHandle for '$propertyName'"
-            )
-            return
-        }
-
-        // Find setElementClass function on LatticeList
+        val getLinkListHandle = findLatticeNativeFunction(latticeNativeSymbol, "getLinkListHandle") ?: return
+        val latticeListClass = pluginContext.referenceClass(ClassId.topLevel(FqName("com.lattice.LatticeList"))) ?: return
+        val listTypeArg = (propertyType as? IrSimpleType)?.arguments?.firstOrNull()?.typeOrNull ?: return
+        val latticeListConstructor = latticeListClass.owner.constructors.firstOrNull() ?: return
+        val nativeHandleProp = latticeListClass.owner.properties.find { it.name.asString() == "_nativeHandle" } ?: return
         val setElementClassFun = latticeListClass.owner.functions.find { it.name.asString() == "setElementClass" }
 
         getter.body = DeclarationIrBuilder(pluginContext, getter.symbol).irBlockBody {
             val thisReceiver = getter.dispatchReceiverParameter!!
-
-            // val list = LatticeList<T>()
             val listInstance = irTemporary(
                 irCallConstructor(latticeListConstructor.symbol, listOf(listTypeArg)),
                 nameHint = "linkList"
             )
 
-            // list._nativeHandle = LatticeNative.getLinkListHandle(_latticeHandle, "propertyName")
             val handleValue = irCall(getLinkListHandle).apply {
                 dispatchReceiver = irGetObject(latticeNativeSymbol)
                 putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
                 putValueArgument(1, irString(propertyName))
             }
 
-            val handleSetter = nativeHandleProp.setter
-            if (handleSetter != null) {
+            nativeHandleProp.setter?.let { handleSetter ->
                 +irCall(handleSetter).apply {
                     dispatchReceiver = irGet(listInstance)
                     putValueArgument(0, handleValue)
                 }
             }
 
-            // list.setElementClass(ElementClass::class)
-            // This allows the list to look up the factory for creating elements
-            if (setElementClassFun != null) {
-                val kClassType = pluginContext.irBuiltIns.kClassClass.typeWith(listTypeArg)
+            if (setElementClassFun != null && listTypeArg.classOrNull != null) {
+                val kClassType = irBuiltIns.kClassClass.typeWith(listTypeArg)
                 +irCall(setElementClassFun).apply {
                     dispatchReceiver = irGet(listInstance)
                     putValueArgument(0, IrClassReferenceImpl(
-                        startOffset = UNDEFINED_OFFSET,
-                        endOffset = UNDEFINED_OFFSET,
-                        type = kClassType,
-                        symbol = listTypeArg.classOrNull!!,
-                        classType = listTypeArg
+                        UNDEFINED_OFFSET, UNDEFINED_OFFSET, kClassType, listTypeArg.classOrNull!!, listTypeArg
                     ))
                 }
             }
 
-            // return list
             +irReturn(irGet(listInstance))
         }
     }
 
-    /**
-     * Transform a @LinkList property setter.
-     * For now, this is a no-op since list modifications happen through the list object itself.
-     */
-    private fun transformLinkListSetter(
-        irClass: IrClass,
-        setter: IrSimpleFunction,
-        handleField: IrField,
-        propertyName: String,
-        propertyType: IrType,
-        latticeNativeSymbol: IrClassSymbol
-    ) {
-        // For link lists, setting is handled by modifying the list directly
-        // The setter is a no-op or could copy elements from the new list
-        val valueParam = setter.regularParameters.firstOrNull() ?: return
-
-        setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {
-            // No-op for now - list modifications happen through the list object
-            // Could potentially copy elements: clear existing, add all from new
-        }
+    private fun transformLinkListSetter(setter: IrSimpleFunction) {
+        if (setter.regularParameters.isEmpty()) return
+        setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {}
     }
 
-    /**
-     * Transform a VirtualList property getter.
-     * Gets the link list handle from C++ and configures a VirtualList wrapper.
-     * Unlike LatticeList, VirtualList does NOT call setElementClass — it resolves
-     * types at runtime via table name using VirtualModelRegistry.
-     *
-     * Generated code:
-     *   val list = VirtualList<T>()
-     *   list._nativeHandle = LatticeNative.getLinkListHandle(_latticeHandle, "propertyName")
-     *   return list
-     */
     private fun transformVirtualListGetter(
-        irClass: IrClass,
         getter: IrSimpleFunction,
         handleField: IrField,
         propertyName: String,
         propertyType: IrType,
         latticeNativeSymbol: IrClassSymbol
     ) {
-        val getLinkListHandle = findLatticeNativeFunction(latticeNativeSymbol, "getLinkListHandle")
-        if (getLinkListHandle == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot find LatticeNative.getLinkListHandle for virtual list '$propertyName', skipping"
-            )
-            return
-        }
-
-        // Find VirtualList class
-        val virtualListClass = pluginContext.referenceClass(
-            ClassId.topLevel(FqName("com.lattice.VirtualList"))
-        )
-        if (virtualListClass == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot find VirtualList class for '$propertyName', skipping"
-            )
-            return
-        }
-
-        // Get the element type from VirtualList<T>
-        val listTypeArg = propertyType.let { pt ->
-            if (pt is org.jetbrains.kotlin.ir.types.IrSimpleType) {
-                pt.arguments.firstOrNull()?.typeOrNull
-            } else null
-        }
-
-        if (listTypeArg == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot determine element type for virtual list '$propertyName', skipping"
-            )
-            return
-        }
-
-        // Find VirtualList constructor
-        val virtualListConstructor = virtualListClass.owner.constructors.firstOrNull()
-        if (virtualListConstructor == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot find VirtualList constructor for '$propertyName'"
-            )
-            return
-        }
-
-        // Find _nativeHandle property on VirtualList
-        val nativeHandleProp = virtualListClass.owner.properties.find { it.name.asString() == "_nativeHandle" }
-        if (nativeHandleProp == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot find VirtualList._nativeHandle for '$propertyName'"
-            )
-            return
-        }
+        val getLinkListHandle = findLatticeNativeFunction(latticeNativeSymbol, "getLinkListHandle") ?: return
+        val virtualListClass = pluginContext.referenceClass(ClassId.topLevel(FqName("com.lattice.VirtualList"))) ?: return
+        val listTypeArg = (propertyType as? IrSimpleType)?.arguments?.firstOrNull()?.typeOrNull ?: return
+        val virtualListConstructor = virtualListClass.owner.constructors.firstOrNull() ?: return
+        val nativeHandleProp = virtualListClass.owner.properties.find { it.name.asString() == "_nativeHandle" } ?: return
 
         getter.body = DeclarationIrBuilder(pluginContext, getter.symbol).irBlockBody {
             val thisReceiver = getter.dispatchReceiverParameter!!
-
-            // val list = VirtualList<T>()
             val listInstance = irTemporary(
                 irCallConstructor(virtualListConstructor.symbol, listOf(listTypeArg)),
                 nameHint = "virtualList"
             )
-
-            // list._nativeHandle = LatticeNative.getLinkListHandle(_latticeHandle, "propertyName")
             val handleValue = irCall(getLinkListHandle).apply {
                 dispatchReceiver = irGetObject(latticeNativeSymbol)
                 putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
                 putValueArgument(1, irString(propertyName))
             }
-
-            val handleSetter = nativeHandleProp.setter
-            if (handleSetter != null) {
+            nativeHandleProp.setter?.let { handleSetter ->
                 +irCall(handleSetter).apply {
                     dispatchReceiver = irGet(listInstance)
                     putValueArgument(0, handleValue)
                 }
             }
-
-            // Do NOT call setElementClass — VirtualList resolves types at runtime via table name
-
-            // return list
             +irReturn(irGet(listInstance))
         }
     }
 
-    /**
-     * Transform a VirtualList property setter.
-     * This is a no-op since list modifications happen through the list object itself.
-     */
-    private fun transformVirtualListSetter(
-        irClass: IrClass,
+    private fun transformVirtualListSetter(setter: IrSimpleFunction) {
+        if (setter.regularParameters.isEmpty()) return
+        setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {}
+    }
+
+    // =========================================================================
+    // @Union Getter & Setter Lowering
+    // =========================================================================
+
+    private fun buildDefaultUnionCaseExpr(
+        builder: IrBuilderWithScope,
+        propertyType: IrType,
+        unionMeta: UnionMeta
+    ): IrExpression = with(builder) {
+        if (propertyType.isNullable()) return irNull()
+        val objCase = unionMeta.cases.firstOrNull { it.isObject }
+        if (objCase != null) return irGetObject(objCase.caseClass.symbol)
+        val firstCase = unionMeta.cases.first()
+        val ctor = firstCase.caseClass.primaryConstructor!!
+        irCallConstructor(ctor.symbol, emptyList())
+    }
+
+    private fun buildReadUnionFieldExpr(
+        builder: IrBuilderWithScope,
+        uvVar: IrVariable,
+        param: UnionParamInfo,
+        latticeNativeSymbol: IrClassSymbol
+    ): IrExpression = with(builder) {
+        val pType = param.paramType
+        val isNullable = pType.isNullable()
+        val pBase = if (isNullable) pType.makeNotNull() else pType
+        val hasFieldFn = findLatticeNativeFunction(latticeNativeSymbol, "hasUnionField")
+
+        fun scalarCall(fnName: String): IrExpression {
+            val fn = findLatticeNativeFunction(latticeNativeSymbol, fnName)!!
+            return irCall(fn).apply {
+                dispatchReceiver = irGetObject(latticeNativeSymbol)
+                putValueArgument(0, irGet(uvVar))
+                putValueArgument(1, irString(param.uvKey))
+            }
+        }
+
+        val nonNullExpr: IrExpression = when {
+            param.isLink -> {
+                val targetCls = pBase.classOrNull!!.owner
+                val getLinkFn = findLatticeNativeFunction(latticeNativeSymbol, "getUnionLinkHandle")!!
+                irBlock {
+                    val lh = irTemporary(irCall(getLinkFn).apply {
+                        dispatchReceiver = irGetObject(latticeNativeSymbol)
+                        putValueArgument(0, irGet(uvVar))
+                        putValueArgument(1, irString(param.uvKey))
+                    }, nameHint = "uLinkH")
+                    +irIfThenElse(
+                        type = pType,
+                        condition = irEquals(irGet(lh), irLong(0L)),
+                        thenPart = if (isNullable) irNull() else irCallConstructor(targetCls.primaryConstructor!!.symbol, emptyList()),
+                        elsePart = buildHydratedModelExpr(this, targetCls, { irGet(lh) }, latticeNativeSymbol)
+                    )
+                }
+            }
+            pBase.classOrNull?.owner?.hasAnnotation(embeddedAnnotationFqn) == true -> {
+                val fn = findLatticeNativeFunction(latticeNativeSymbol, "getUnionEmbedded")!!
+                val kClassType = irBuiltIns.kClassClass.typeWith(pBase)
+                val kClassRef = IrClassReferenceImpl(
+                    UNDEFINED_OFFSET, UNDEFINED_OFFSET, kClassType, pBase.classOrNull!!, pBase
+                )
+                val raw = irCall(fn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    typeArguments[0] = pBase
+                    putValueArgument(0, irGet(uvVar))
+                    putValueArgument(1, irString(param.uvKey))
+                    putValueArgument(2, kClassRef)
+                }
+                if (isNullable) raw else irImplicitCast(raw, pBase)
+            }
+            isLatticeEnum(pBase) -> {
+                val enumCls = pBase.classOrNull!!.owner
+                if (getEnumStoreAsOrdinal(pBase)) {
+                    val valuesFn = enumCls.functions.find { it.name.asString() == "values" }!!
+                    val arrGet = irBuiltIns.arrayClass.owner.declarations
+                        .filterIsInstance<IrSimpleFunction>()
+                        .find { it.name.asString() == "get" }!!.symbol
+                    irCall(arrGet).apply {
+                        dispatchReceiver = irCall(valuesFn.symbol)
+                        putValueArgument(0, scalarCall("getUnionInt"))
+                    }
+                } else {
+                    val valueOfFn = enumCls.functions.find {
+                        it.name.asString() == "valueOf" && it.regularParameters.size == 1
+                    }!!
+                    val valuesFn = enumCls.functions.find { it.name.asString() == "values" }
+                    val resolver = findLatticeNativeFunction(latticeNativeSymbol, "enumNameOrDefault")
+                    val resolvedName = if (resolver != null && valuesFn != null) {
+                        irCall(resolver).apply {
+                            dispatchReceiver = irGetObject(latticeNativeSymbol)
+                            putValueArgument(0, irCall(valuesFn))
+                            putValueArgument(1, scalarCall("getUnionString"))
+                            putValueArgument(2, irInt(0))
+                        }
+                    } else scalarCall("getUnionString")
+                    irCall(valueOfFn).apply { putValueArgument(0, resolvedName) }
+                }
+            }
+            pBase.isInt() -> scalarCall("getUnionInt")
+            pBase.isLong() -> scalarCall("getUnionLong")
+            pBase.isDouble() -> scalarCall("getUnionDouble")
+            pBase.isFloat() -> scalarCall("getUnionFloat")
+            pBase.isBoolean() -> scalarCall("getUnionBoolean")
+            isByteArray(pBase) -> scalarCall("getUnionBlob")
+            isInstant(pBase) -> scalarCall("getUnionInstant")
+            isUuid(pBase) -> scalarCall("getUnionUuid")
+            else -> scalarCall("getUnionString")
+        }
+
+        if (isNullable && !param.isLink && hasFieldFn != null) {
+            irIfThenElse(
+                type = pType,
+                condition = irCall(hasFieldFn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, irGet(uvVar))
+                    putValueArgument(1, irString(param.uvKey))
+                },
+                thenPart = nonNullExpr,
+                elsePart = irNull()
+            )
+        } else {
+            nonNullExpr
+        }
+    }
+
+    private fun transformUnionGetter(
+        getter: IrSimpleFunction,
+        handleField: IrField,
+        propertyName: String,
+        propertyType: IrType,
+        unionMeta: UnionMeta,
+        latticeNativeSymbol: IrClassSymbol
+    ) {
+        val getUnionHandleFn = findLatticeNativeFunction(latticeNativeSymbol, "getUnionHandle") ?: return
+        val getUnionCaseFn = findLatticeNativeFunction(latticeNativeSymbol, "getUnionCase") ?: return
+        val releaseUnionHandleFn = findLatticeNativeFunction(latticeNativeSymbol, "releaseUnionHandle") ?: return
+
+        getter.body = DeclarationIrBuilder(pluginContext, getter.symbol).irBlockBody {
+            val thisReceiver = getter.dispatchReceiverParameter!!
+            val uvVar = irTemporary(
+                irCall(getUnionHandleFn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
+                    putValueArgument(1, irString(propertyName))
+                },
+                nameHint = "uvHandle"
+            )
+
+            +irIfThen(
+                type = irBuiltIns.unitType,
+                condition = irEquals(irGet(uvVar), irLong(0L)),
+                thenPart = irReturn(buildDefaultUnionCaseExpr(this, propertyType, unionMeta))
+            )
+
+            val caseVar = irTemporary(
+                irCall(getUnionCaseFn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, irGet(uvVar))
+                },
+                nameHint = "caseName"
+            )
+
+            val branches = mutableListOf<IrBranch>()
+            for (c in unionMeta.cases) {
+                val cond = irEquals(irGet(caseVar), irString(c.caseName))
+                val caseExpr: IrExpression = if (c.isObject) {
+                    irGetObject(c.caseClass.symbol)
+                } else {
+                    val ctor = c.caseClass.primaryConstructor!!
+                    irCallConstructor(ctor.symbol, emptyList()).apply {
+                        c.params.forEachIndexed { idx, pInfo ->
+                            putValueArgument(idx, buildReadUnionFieldExpr(this@irBlockBody, uvVar, pInfo, latticeNativeSymbol))
+                        }
+                    }
+                }
+                branches += irBranch(cond, caseExpr)
+            }
+            branches += irElseBranch(buildDefaultUnionCaseExpr(this, propertyType, unionMeta))
+
+            val resVar = irTemporary(
+                irWhen(propertyType, branches),
+                nameHint = "unionResult"
+            )
+
+            +irCall(releaseUnionHandleFn).apply {
+                dispatchReceiver = irGetObject(latticeNativeSymbol)
+                putValueArgument(0, irGet(uvVar))
+            }
+
+            +irReturn(irGet(resVar))
+        }
+    }
+
+    private fun emitSetUnionFieldStatement(
+        blockBuilder: IrBlockBuilder,
+        uvVar: IrVariable,
+        caseVar: IrVariable,
+        caseClass: IrClass,
+        param: UnionParamInfo,
+        latticeNativeSymbol: IrClassSymbol
+    ) = with(blockBuilder) {
+        val prop = caseClass.properties.find { it.name.asString() == param.kotlinPropName } ?: return
+        val propGetter = prop.getter ?: return
+        val rawFieldVal = irCall(propGetter).apply {
+            dispatchReceiver = irGet(caseVar)
+        }
+
+        val pType = param.paramType
+        val isNullable = pType.isNullable()
+        val pBase = if (isNullable) pType.makeNotNull() else pType
+
+        fun emitNonNullWrite(valExpr: IrExpression): IrExpression {
+            return when {
+                param.isLink -> {
+                    val fn = findLatticeNativeFunction(latticeNativeSymbol, "setUnionLinkHandle")!!
+                    irCall(fn).apply {
+                        dispatchReceiver = irGetObject(latticeNativeSymbol)
+                        putValueArgument(0, irGet(uvVar))
+                        putValueArgument(1, irString(param.uvKey))
+                        putValueArgument(2, valExpr)
+                    }
+                }
+                pBase.classOrNull?.owner?.hasAnnotation(embeddedAnnotationFqn) == true -> {
+                    val fn = findLatticeNativeFunction(latticeNativeSymbol, "setUnionEmbedded")!!
+                    val kClassType = irBuiltIns.kClassClass.typeWith(pBase)
+                    val kClassRef = IrClassReferenceImpl(
+                        UNDEFINED_OFFSET, UNDEFINED_OFFSET, kClassType, pBase.classOrNull!!, pBase
+                    )
+                    irCall(fn).apply {
+                        dispatchReceiver = irGetObject(latticeNativeSymbol)
+                        typeArguments[0] = pBase
+                        putValueArgument(0, irGet(uvVar))
+                        putValueArgument(1, irString(param.uvKey))
+                        putValueArgument(2, valExpr)
+                        putValueArgument(3, kClassRef)
+                    }
+                }
+                isLatticeEnum(pBase) -> {
+                    val enumCls = pBase.classOrNull!!.owner
+                    if (getEnumStoreAsOrdinal(pBase)) {
+                        val ordProp = enumCls.properties.find { it.name.asString() == "ordinal" }
+                            ?: pluginContext.referenceClass(ClassId.topLevel(FqName("kotlin.Enum")))
+                                ?.owner?.properties?.find { it.name.asString() == "ordinal" }!!
+                        val fn = findLatticeNativeFunction(latticeNativeSymbol, "setUnionInt")!!
+                        irCall(fn).apply {
+                            dispatchReceiver = irGetObject(latticeNativeSymbol)
+                            putValueArgument(0, irGet(uvVar))
+                            putValueArgument(1, irString(param.uvKey))
+                            putValueArgument(2, irCall(ordProp.getter!!).apply { dispatchReceiver = valExpr })
+                        }
+                    } else {
+                        val nameProp = enumCls.properties.find { it.name.asString() == "name" }
+                            ?: pluginContext.referenceClass(ClassId.topLevel(FqName("kotlin.Enum")))
+                                ?.owner?.properties?.find { it.name.asString() == "name" }!!
+                        val fn = findLatticeNativeFunction(latticeNativeSymbol, "setUnionString")!!
+                        irCall(fn).apply {
+                            dispatchReceiver = irGetObject(latticeNativeSymbol)
+                            putValueArgument(0, irGet(uvVar))
+                            putValueArgument(1, irString(param.uvKey))
+                            putValueArgument(2, irCall(nameProp.getter!!).apply { dispatchReceiver = valExpr })
+                        }
+                    }
+                }
+                pBase.isInt() -> irCall(findLatticeNativeFunction(latticeNativeSymbol, "setUnionInt")!!).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, irGet(uvVar)); putValueArgument(1, irString(param.uvKey)); putValueArgument(2, valExpr)
+                }
+                pBase.isLong() -> irCall(findLatticeNativeFunction(latticeNativeSymbol, "setUnionLong")!!).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, irGet(uvVar)); putValueArgument(1, irString(param.uvKey)); putValueArgument(2, valExpr)
+                }
+                pBase.isDouble() -> irCall(findLatticeNativeFunction(latticeNativeSymbol, "setUnionDouble")!!).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, irGet(uvVar)); putValueArgument(1, irString(param.uvKey)); putValueArgument(2, valExpr)
+                }
+                pBase.isFloat() -> irCall(findLatticeNativeFunction(latticeNativeSymbol, "setUnionFloat")!!).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, irGet(uvVar)); putValueArgument(1, irString(param.uvKey)); putValueArgument(2, valExpr)
+                }
+                pBase.isBoolean() -> irCall(findLatticeNativeFunction(latticeNativeSymbol, "setUnionBoolean")!!).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, irGet(uvVar)); putValueArgument(1, irString(param.uvKey)); putValueArgument(2, valExpr)
+                }
+                isByteArray(pBase) -> irCall(findLatticeNativeFunction(latticeNativeSymbol, "setUnionBlob")!!).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, irGet(uvVar)); putValueArgument(1, irString(param.uvKey)); putValueArgument(2, valExpr)
+                }
+                isInstant(pBase) -> irCall(findLatticeNativeFunction(latticeNativeSymbol, "setUnionInstant")!!).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, irGet(uvVar)); putValueArgument(1, irString(param.uvKey)); putValueArgument(2, valExpr)
+                }
+                isUuid(pBase) -> irCall(findLatticeNativeFunction(latticeNativeSymbol, "setUnionUuid")!!).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, irGet(uvVar)); putValueArgument(1, irString(param.uvKey)); putValueArgument(2, valExpr)
+                }
+                else -> irCall(findLatticeNativeFunction(latticeNativeSymbol, "setUnionString")!!).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, irGet(uvVar)); putValueArgument(1, irString(param.uvKey)); putValueArgument(2, valExpr)
+                }
+            }
+        }
+
+        if (isNullable) {
+            val fVar = irTemporary(rawFieldVal, nameHint = "uField")
+            +irIfThen(
+                type = irBuiltIns.unitType,
+                condition = irNotEquals(irGet(fVar), irNull()),
+                thenPart = emitNonNullWrite(irImplicitCast(irGet(fVar), pBase))
+            )
+        } else {
+            +emitNonNullWrite(rawFieldVal)
+        }
+    }
+
+    private fun emitSetUnionStatements(
+        blockBuilder: IrBlockBuilder,
+        handleExpr: () -> IrExpression,
+        propertyName: String,
+        propertyType: IrType,
+        valueExpr: IrExpression,
+        unionMeta: UnionMeta,
+        latticeNativeSymbol: IrClassSymbol
+    ) = with(blockBuilder) {
+        val createUnionFn = findLatticeNativeFunction(latticeNativeSymbol, "createUnionHandle") ?: return
+        val setAndReleaseFn = findLatticeNativeFunction(latticeNativeSymbol, "setAndReleaseUnion") ?: return
+        val clearUnionFn = findLatticeNativeFunction(latticeNativeSymbol, "clearUnion") ?: return
+
+        val valVar = irTemporary(valueExpr, nameHint = "unionVal")
+
+        val branches = mutableListOf<IrBranch>()
+        if (propertyType.isNullable()) {
+            branches += irBranch(
+                irEqualsNull(irGet(valVar)),
+                irCall(clearUnionFn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, handleExpr())
+                    putValueArgument(1, irString(propertyName))
+                }
+            )
+        }
+
+        for (c in unionMeta.cases) {
+            val cond = irIs(irGet(valVar), c.caseClass.defaultType)
+            val body = irBlock {
+                val uvVar = irTemporary(
+                    irCall(createUnionFn).apply {
+                        dispatchReceiver = irGetObject(latticeNativeSymbol)
+                        putValueArgument(0, irString(c.caseName))
+                    },
+                    nameHint = "uvOut"
+                )
+                if (!c.isObject && c.params.isNotEmpty()) {
+                    val typedCase = irTemporary(
+                        irImplicitCast(irGet(valVar), c.caseClass.defaultType),
+                        nameHint = "typedCase"
+                    )
+                    for (p in c.params) {
+                        emitSetUnionFieldStatement(this, uvVar, typedCase, c.caseClass, p, latticeNativeSymbol)
+                    }
+                }
+                +irCall(setAndReleaseFn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, handleExpr())
+                    putValueArgument(1, irString(propertyName))
+                    putValueArgument(2, irGet(uvVar))
+                }
+            }
+            branches += irBranch(cond, body)
+        }
+
+        +irWhen(irBuiltIns.unitType, branches)
+    }
+
+    private fun transformUnionSetter(
         setter: IrSimpleFunction,
         handleField: IrField,
         propertyName: String,
         propertyType: IrType,
+        unionMeta: UnionMeta,
         latticeNativeSymbol: IrClassSymbol
     ) {
-        // For virtual lists, setting is handled by modifying the list directly
-        // The setter is a no-op
         val valueParam = setter.regularParameters.firstOrNull() ?: return
 
         setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {
-            // No-op — list modifications happen through the list object
+            val thisReceiver = setter.dispatchReceiverParameter!!
+            +irBlock {
+                emitSetUnionStatements(
+                    blockBuilder = this,
+                    handleExpr = { irGetField(irGet(thisReceiver), handleField) },
+                    propertyName = propertyName,
+                    propertyType = propertyType,
+                    valueExpr = irGet(valueParam),
+                    unionMeta = unionMeta,
+                    latticeNativeSymbol = latticeNativeSymbol
+                )
+            }
         }
     }
 
-    /**
-     * Transform an embedded model property getter.
-     * Reads JSON from C++ and decodes it using the registered serializer.
-     *
-     * Generated code:
-     *   return LatticeNative.getEmbedded(_latticeHandle, "propertyName", EmbeddedType::class)
-     */
+    // =========================================================================
+    // @Embedded & @LatticeEnum & Collection Property Accessors
+    // =========================================================================
+
     private fun transformEmbeddedGetter(
-        irClass: IrClass,
         getter: IrSimpleFunction,
         handleField: IrField,
         propertyName: String,
         propertyType: IrType,
         latticeNativeSymbol: IrClassSymbol
     ) {
-        val getEmbedded = findLatticeNativeFunction(latticeNativeSymbol, "getEmbedded")
-        if (getEmbedded == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot find LatticeNative.getEmbedded for '$propertyName', skipping"
-            )
-            return
-        }
-
+        val getEmbedded = findLatticeNativeFunction(latticeNativeSymbol, "getEmbedded") ?: return
         val isNullable = propertyType.isNullable()
         val baseType = if (isNullable) propertyType.makeNotNull() else propertyType
-        val embeddedClass = baseType.classOrNull?.owner
-        if (embeddedClass == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot determine embedded class for '$propertyName', skipping"
-            )
-            return
-        }
+        if (baseType.classOrNull == null) return
 
         getter.body = DeclarationIrBuilder(pluginContext, getter.symbol).irBlockBody {
             val thisReceiver = getter.dispatchReceiverParameter!!
-
-            // Create KClass reference for the embedded type
-            val kClassType = pluginContext.irBuiltIns.kClassClass.typeWith(baseType)
+            val kClassType = irBuiltIns.kClassClass.typeWith(baseType)
             val kClassRef = IrClassReferenceImpl(
-                startOffset = UNDEFINED_OFFSET,
-                endOffset = UNDEFINED_OFFSET,
-                type = kClassType,
-                symbol = baseType.classOrNull!!,
-                classType = baseType
+                UNDEFINED_OFFSET, UNDEFINED_OFFSET, kClassType, baseType.classOrNull!!, baseType
             )
-
-            // Call LatticeNative.getEmbedded(_latticeHandle, "propertyName", EmbeddedType::class, useDefaultIfMissing)
-            // For non-nullable properties, use default if missing
-            // For nullable properties, return null if missing
-            val result = irCall(getEmbedded).apply {
-                dispatchReceiver = irGetObject(latticeNativeSymbol)
-                putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
-                putValueArgument(1, irString(propertyName))
-                putValueArgument(2, kClassRef)
-                putValueArgument(3, irBoolean(!isNullable)) // useDefaultIfMissing = true for non-nullable
-            }
-
-            +irReturn(result)
+            +irReturn(
+                irCall(getEmbedded).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    typeArguments[0] = baseType
+                    putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
+                    putValueArgument(1, irString(propertyName))
+                    putValueArgument(2, kClassRef)
+                    putValueArgument(3, irBoolean(!isNullable))
+                }
+            )
         }
     }
 
-    /**
-     * Transform an embedded model property setter.
-     * Encodes the value to JSON and stores it in C++.
-     *
-     * Generated code:
-     *   LatticeNative.setEmbedded(_latticeHandle, "propertyName", value, EmbeddedType::class)
-     */
     private fun transformEmbeddedSetter(
-        irClass: IrClass,
         setter: IrSimpleFunction,
         handleField: IrField,
         propertyName: String,
         propertyType: IrType,
         latticeNativeSymbol: IrClassSymbol
     ) {
-        val setEmbedded = findLatticeNativeFunction(latticeNativeSymbol, "setEmbedded")
-        if (setEmbedded == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot find LatticeNative.setEmbedded for '$propertyName', skipping"
-            )
-            return
-        }
-
+        val setEmbedded = findLatticeNativeFunction(latticeNativeSymbol, "setEmbedded") ?: return
         val valueParam = setter.regularParameters.firstOrNull() ?: return
         val baseType = if (propertyType.isNullable()) propertyType.makeNotNull() else propertyType
+        if (baseType.classOrNull == null) return
 
         setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {
             val thisReceiver = setter.dispatchReceiverParameter!!
-
-            // Create KClass reference for the embedded type
-            val kClassType = pluginContext.irBuiltIns.kClassClass.typeWith(baseType)
+            val kClassType = irBuiltIns.kClassClass.typeWith(baseType)
             val kClassRef = IrClassReferenceImpl(
-                startOffset = UNDEFINED_OFFSET,
-                endOffset = UNDEFINED_OFFSET,
-                type = kClassType,
-                symbol = baseType.classOrNull!!,
-                classType = baseType
+                UNDEFINED_OFFSET, UNDEFINED_OFFSET, kClassType, baseType.classOrNull!!, baseType
             )
-
-            // Call LatticeNative.setEmbedded(_latticeHandle, "propertyName", value, EmbeddedType::class)
             +irCall(setEmbedded).apply {
                 dispatchReceiver = irGetObject(latticeNativeSymbol)
+                typeArguments[0] = baseType
                 putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
                 putValueArgument(1, irString(propertyName))
                 putValueArgument(2, irGet(valueParam))
@@ -1891,123 +1825,245 @@ class LatticeIrTransformer(
         }
     }
 
-    /**
-     * Determine the LatticeNative getter method name for a collection type.
-     * Returns null if the collection type is not supported.
-     */
-    private fun getCollectionGetterName(type: IrType): String? {
-        val className = type.classOrNull?.owner?.name?.asString() ?: return null
-        val elementType = (type as? org.jetbrains.kotlin.ir.types.IrSimpleType)
-            ?.arguments?.firstOrNull()?.typeOrNull
+    private fun buildCollectionGetCall(
+        builder: IrBuilderWithScope,
+        handleExpr: IrExpression,
+        propertyName: String,
+        propertyType: IrType,
+        latticeNativeSymbol: IrClassSymbol
+    ): IrExpression? = with(builder) {
+        val baseColl = if (propertyType.isNullable()) propertyType.makeNotNull() else propertyType
+        val className = baseColl.classOrNull?.owner?.name?.asString() ?: return null
+        val elemType = (baseColl as? IrSimpleType)?.arguments?.firstOrNull()?.typeOrNull
+        val elemBase = elemType?.let { if (it.isNullable()) it.makeNotNull() else it }
 
-        return when {
-            className in setOf("List", "MutableList", "ArrayList") && elementType?.isString() == true -> "getStringList"
-            className in setOf("Set", "MutableSet", "HashSet", "LinkedHashSet") && elementType?.isString() == true -> "getStringSet"
-            className in setOf("Map", "MutableMap", "HashMap", "LinkedHashMap") -> "getStringStringMap"
-            else -> null // Unsupported collection type — stays in backing field
-        }
-    }
+        val isList = className in setOf("List", "MutableList", "ArrayList")
+        val isSet = className in setOf("Set", "MutableSet", "HashSet", "LinkedHashSet")
+        val isMap = className in setOf("Map", "MutableMap", "HashMap", "LinkedHashMap")
 
-    private fun getCollectionSetterName(type: IrType): String? {
-        val className = type.classOrNull?.owner?.name?.asString() ?: return null
-        val elementType = (type as? org.jetbrains.kotlin.ir.types.IrSimpleType)
-            ?.arguments?.firstOrNull()?.typeOrNull
-
-        return when {
-            className in setOf("List", "MutableList", "ArrayList") && elementType?.isString() == true -> "setStringList"
-            className in setOf("Set", "MutableSet", "HashSet", "LinkedHashSet") && elementType?.isString() == true -> "setStringSet"
-            className in setOf("Map", "MutableMap", "HashMap", "LinkedHashMap") -> "setStringStringMap"
+        when {
+            isList && elemBase?.isString() == true -> {
+                val fn = findLatticeNativeFunction(latticeNativeSymbol, if (propertyType.isNullable()) "getStringListOrNull" else "getStringList") ?: return null
+                irCall(fn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, handleExpr); putValueArgument(1, irString(propertyName))
+                }
+            }
+            isList && elemBase?.isInt() == true -> {
+                val fn = findLatticeNativeFunction(latticeNativeSymbol, "getIntList") ?: return null
+                irCall(fn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, handleExpr); putValueArgument(1, irString(propertyName))
+                }
+            }
+            isList && elemBase?.isLong() == true -> {
+                val fn = findLatticeNativeFunction(latticeNativeSymbol, "getLongList") ?: return null
+                irCall(fn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, handleExpr); putValueArgument(1, irString(propertyName))
+                }
+            }
+            isList && elemBase?.isDouble() == true -> {
+                val fn = findLatticeNativeFunction(latticeNativeSymbol, "getDoubleList") ?: return null
+                irCall(fn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, handleExpr); putValueArgument(1, irString(propertyName))
+                }
+            }
+            isList && elemBase?.classOrNull?.owner?.hasAnnotation(embeddedAnnotationFqn) == true -> {
+                val fn = findLatticeNativeFunction(latticeNativeSymbol, "getEmbeddedList") ?: return null
+                val kClassType = irBuiltIns.kClassClass.typeWith(elemBase)
+                val kClassRef = IrClassReferenceImpl(
+                    UNDEFINED_OFFSET, UNDEFINED_OFFSET, kClassType, elemBase.classOrNull!!, elemBase
+                )
+                irCall(fn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    typeArguments[0] = elemBase
+                    putValueArgument(0, handleExpr)
+                    putValueArgument(1, irString(propertyName))
+                    putValueArgument(2, kClassRef)
+                }
+            }
+            isList && elemBase != null && isLatticeEnum(elemBase) -> {
+                val fn = findLatticeNativeFunction(latticeNativeSymbol, "getEnumList") ?: return null
+                val valuesFn = elemBase.classOrNull?.owner?.functions?.find { it.name.asString() == "values" } ?: return null
+                irCall(fn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    typeArguments[0] = elemBase
+                    putValueArgument(0, handleExpr)
+                    putValueArgument(1, irString(propertyName))
+                    putValueArgument(2, irCall(valuesFn))
+                }
+            }
+            isSet && elemBase?.isString() == true -> {
+                val fn = findLatticeNativeFunction(latticeNativeSymbol, "getStringSet") ?: return null
+                irCall(fn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, handleExpr); putValueArgument(1, irString(propertyName))
+                }
+            }
+            isSet && elemBase != null && isLatticeEnum(elemBase) -> {
+                val fn = findLatticeNativeFunction(latticeNativeSymbol, "getEnumSet") ?: return null
+                val valuesFn = elemBase.classOrNull?.owner?.functions?.find { it.name.asString() == "values" } ?: return null
+                irCall(fn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    typeArguments[0] = elemBase
+                    putValueArgument(0, handleExpr)
+                    putValueArgument(1, irString(propertyName))
+                    putValueArgument(2, irCall(valuesFn))
+                }
+            }
+            isMap -> {
+                val fn = findLatticeNativeFunction(latticeNativeSymbol, "getStringStringMap") ?: return null
+                irCall(fn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, handleExpr); putValueArgument(1, irString(propertyName))
+                }
+            }
             else -> null
         }
     }
 
-    /**
-     * Transform a native collection property getter.
-     * Calls LatticeNative.getStringList/getStringSet/getStringStringMap.
-     */
+    private fun buildCollectionSetCall(
+        builder: IrBuilderWithScope,
+        handleExpr: IrExpression,
+        propertyName: String,
+        propertyType: IrType,
+        valueExpr: IrExpression,
+        latticeNativeSymbol: IrClassSymbol
+    ): IrExpression? = with(builder) {
+        val baseColl = if (propertyType.isNullable()) propertyType.makeNotNull() else propertyType
+        val className = baseColl.classOrNull?.owner?.name?.asString() ?: return null
+        val elemType = (baseColl as? IrSimpleType)?.arguments?.firstOrNull()?.typeOrNull
+        val elemBase = elemType?.let { if (it.isNullable()) it.makeNotNull() else it }
+
+        val isList = className in setOf("List", "MutableList", "ArrayList")
+        val isSet = className in setOf("Set", "MutableSet", "HashSet", "LinkedHashSet")
+        val isMap = className in setOf("Map", "MutableMap", "HashMap", "LinkedHashMap")
+
+        when {
+            isList && elemBase?.isString() == true -> {
+                val fn = findLatticeNativeFunction(latticeNativeSymbol, "setStringList") ?: return null
+                irCall(fn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, handleExpr); putValueArgument(1, irString(propertyName)); putValueArgument(2, valueExpr)
+                }
+            }
+            isList && elemBase?.isInt() == true -> {
+                val fn = findLatticeNativeFunction(latticeNativeSymbol, "setIntList") ?: return null
+                irCall(fn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, handleExpr); putValueArgument(1, irString(propertyName)); putValueArgument(2, valueExpr)
+                }
+            }
+            isList && elemBase?.isLong() == true -> {
+                val fn = findLatticeNativeFunction(latticeNativeSymbol, "setLongList") ?: return null
+                irCall(fn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, handleExpr); putValueArgument(1, irString(propertyName)); putValueArgument(2, valueExpr)
+                }
+            }
+            isList && elemBase?.isDouble() == true -> {
+                val fn = findLatticeNativeFunction(latticeNativeSymbol, "setDoubleList") ?: return null
+                irCall(fn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, handleExpr); putValueArgument(1, irString(propertyName)); putValueArgument(2, valueExpr)
+                }
+            }
+            isList && elemBase?.classOrNull?.owner?.hasAnnotation(embeddedAnnotationFqn) == true -> {
+                val fn = findLatticeNativeFunction(latticeNativeSymbol, "setEmbeddedList") ?: return null
+                val kClassType = irBuiltIns.kClassClass.typeWith(elemBase)
+                val kClassRef = IrClassReferenceImpl(
+                    UNDEFINED_OFFSET, UNDEFINED_OFFSET, kClassType, elemBase.classOrNull!!, elemBase
+                )
+                irCall(fn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    typeArguments[0] = elemBase
+                    putValueArgument(0, handleExpr)
+                    putValueArgument(1, irString(propertyName))
+                    putValueArgument(2, valueExpr)
+                    putValueArgument(3, kClassRef)
+                }
+            }
+            isList && elemBase != null && isLatticeEnum(elemBase) -> {
+                val fn = findLatticeNativeFunction(latticeNativeSymbol, "setEnumList") ?: return null
+                irCall(fn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, handleExpr); putValueArgument(1, irString(propertyName)); putValueArgument(2, valueExpr)
+                }
+            }
+            isSet && elemBase?.isString() == true -> {
+                val fn = findLatticeNativeFunction(latticeNativeSymbol, "setStringSet") ?: return null
+                irCall(fn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, handleExpr); putValueArgument(1, irString(propertyName)); putValueArgument(2, valueExpr)
+                }
+            }
+            isSet && elemBase != null && isLatticeEnum(elemBase) -> {
+                val fn = findLatticeNativeFunction(latticeNativeSymbol, "setEnumSet") ?: return null
+                irCall(fn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, handleExpr); putValueArgument(1, irString(propertyName)); putValueArgument(2, valueExpr)
+                }
+            }
+            isMap -> {
+                val fn = findLatticeNativeFunction(latticeNativeSymbol, "setStringStringMap") ?: return null
+                irCall(fn).apply {
+                    dispatchReceiver = irGetObject(latticeNativeSymbol)
+                    putValueArgument(0, handleExpr); putValueArgument(1, irString(propertyName)); putValueArgument(2, valueExpr)
+                }
+            }
+            else -> null
+        }
+    }
+
     private fun transformCollectionGetter(
-        irClass: IrClass,
         getter: IrSimpleFunction,
         handleField: IrField,
-        backingField: IrField,
         propertyName: String,
         propertyType: IrType,
         latticeNativeSymbol: IrClassSymbol
     ) {
-        val getterName = getCollectionGetterName(propertyType)
-        if (getterName == null) {
-            // Unsupported collection type — leave getter as-is (uses backing field)
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Unsupported collection type for '$propertyName', using backing field"
-            )
-            return
-        }
+        val builder = DeclarationIrBuilder(pluginContext, getter.symbol)
+        val thisReceiver = getter.dispatchReceiverParameter ?: return
+        val callExpr = buildCollectionGetCall(
+            builder = builder,
+            handleExpr = builder.irGetField(builder.irGet(thisReceiver), handleField),
+            propertyName = propertyName,
+            propertyType = propertyType,
+            latticeNativeSymbol = latticeNativeSymbol
+        ) ?: return
 
-        val nativeGetter = findLatticeNativeFunction(latticeNativeSymbol, getterName) ?: return
-
-        getter.body = DeclarationIrBuilder(pluginContext, getter.symbol).irBlockBody {
-            val thisReceiver = getter.dispatchReceiverParameter!!
-            +irReturn(
-                irCall(nativeGetter).apply {
-                    dispatchReceiver = irGetObject(latticeNativeSymbol)
-                    putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
-                    putValueArgument(1, irString(propertyName))
-                }
-            )
+        getter.body = builder.irBlockBody {
+            +irReturn(callExpr)
         }
     }
 
-    /**
-     * Transform a native collection property setter.
-     * Calls LatticeNative.setStringList/setStringSet/setStringStringMap.
-     */
     private fun transformCollectionSetter(
-        irClass: IrClass,
         setter: IrSimpleFunction,
         handleField: IrField,
-        backingField: IrField,
         propertyName: String,
         propertyType: IrType,
         latticeNativeSymbol: IrClassSymbol
     ) {
-        val setterName = getCollectionSetterName(propertyType)
-        if (setterName == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Unsupported collection type for setter '$propertyName', using backing field"
-            )
-            return
-        }
-
-        val nativeSetter = findLatticeNativeFunction(latticeNativeSymbol, setterName) ?: return
         val valueParam = setter.regularParameters.firstOrNull() ?: return
+        val builder = DeclarationIrBuilder(pluginContext, setter.symbol)
+        val thisReceiver = setter.dispatchReceiverParameter ?: return
+        val callExpr = buildCollectionSetCall(
+            builder = builder,
+            handleExpr = builder.irGetField(builder.irGet(thisReceiver), handleField),
+            propertyName = propertyName,
+            propertyType = propertyType,
+            valueExpr = builder.irGet(valueParam),
+            latticeNativeSymbol = latticeNativeSymbol
+        ) ?: return
 
-        setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {
-            val thisReceiver = setter.dispatchReceiverParameter!!
-            +irCall(nativeSetter).apply {
-                dispatchReceiver = irGetObject(latticeNativeSymbol)
-                putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
-                putValueArgument(1, irString(propertyName))
-                putValueArgument(2, irGet(valueParam))
-            }
+        setter.body = builder.irBlockBody {
+            +callExpr
         }
     }
 
-    /**
-     * Transform a @LatticeEnum property getter.
-     * Reads string name (or ordinal) from C++ and converts to enum value.
-     *
-     * Generated code (storeAsOrdinal=false):
-     *   val name = LatticeNative.getString(_latticeHandle, "propertyName")
-     *   return EnumClass.valueOf(name)
-     *
-     * Generated code (storeAsOrdinal=true):
-     *   val ordinal = LatticeNative.getInt(_latticeHandle, "propertyName")
-     *   return EnumClass.entries[ordinal]
-     */
     private fun transformEnumGetter(
-        irClass: IrClass,
         getter: IrSimpleFunction,
         handleField: IrField,
         propertyName: String,
@@ -2017,57 +2073,27 @@ class LatticeIrTransformer(
         val isNullable = propertyType.isNullable()
         val baseType = if (isNullable) propertyType.makeNotNull() else propertyType
         val storeAsOrdinal = getEnumStoreAsOrdinal(baseType)
+        val enumClass = baseType.classOrNull?.owner ?: return
 
-        val enumClass = baseType.classOrNull?.owner
-        if (enumClass == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot determine enum class for '$propertyName', skipping"
-            )
-            return
-        }
-
-        // Find the valueOf function or entries property
         val valueOfFn = enumClass.functions.find {
             it.name.asString() == "valueOf" && it.regularParameters.size == 1
         }
 
-        // Find entries property (Kotlin 1.9+)
-        val entriesProp = enumClass.properties.find { it.name.asString() == "entries" }
-
         if (storeAsOrdinal) {
-            // Use ordinal storage: read int, use values()[ordinal]
-            val nativeGetter = findLatticeNativeFunction(latticeNativeSymbol, "getInt")
+            val nativeGetter = findLatticeNativeFunction(latticeNativeSymbol, "getInt") ?: return
             val hasValueFn = findLatticeNativeFunction(latticeNativeSymbol, "hasValue")
-            if (nativeGetter == null) {
-                messageCollector.report(
-                    CompilerMessageSeverity.WARNING,
-                    "Lattice: Cannot find LatticeNative.getInt for enum '$propertyName', skipping"
-                )
-                return
-            }
-
-            val valuesFn = enumClass.functions.find { it.name.asString() == "values" }
-            if (valuesFn == null) {
-                messageCollector.report(
-                    CompilerMessageSeverity.WARNING,
-                    "Lattice: Cannot find values() for enum '$propertyName', skipping"
-                )
-                return
-            }
+            val valuesFn = enumClass.functions.find { it.name.asString() == "values" } ?: return
 
             getter.body = DeclarationIrBuilder(pluginContext, getter.symbol).irBlockBody {
                 val thisReceiver = getter.dispatchReceiverParameter!!
                 val handleExpr = irGetField(irGet(thisReceiver), handleField)
 
                 if (isNullable && hasValueFn != null) {
-                    // For nullable: if (hasValue) return values()[getInt()] else return null
                     val hasValue = irCall(hasValueFn).apply {
                         dispatchReceiver = irGetObject(latticeNativeSymbol)
                         putValueArgument(0, handleExpr)
                         putValueArgument(1, irString(propertyName))
                     }
-
                     +irIfThenElse(
                         type = propertyType,
                         condition = hasValue,
@@ -2077,65 +2103,42 @@ class LatticeIrTransformer(
                                 putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
                                 putValueArgument(1, irString(propertyName))
                             }
-                            val valuesCall = irCall(valuesFn.symbol)
                             +irReturn(irCall(
                                 irBuiltIns.arrayClass.owner.declarations
                                     .filterIsInstance<IrSimpleFunction>()
                                     .find { it.name.asString() == "get" }!!.symbol
                             ).apply {
-                                dispatchReceiver = valuesCall
+                                dispatchReceiver = irCall(valuesFn.symbol)
                                 putValueArgument(0, ordinal)
                             })
                         },
                         elsePart = irReturn(irNull())
                     )
                 } else {
-                    // For non-nullable: just return values()[getInt()]
                     val ordinal = irCall(nativeGetter).apply {
                         dispatchReceiver = irGetObject(latticeNativeSymbol)
                         putValueArgument(0, handleExpr)
                         putValueArgument(1, irString(propertyName))
                     }
-                    val valuesCall = irCall(valuesFn.symbol)
                     +irReturn(irCall(
                         irBuiltIns.arrayClass.owner.declarations
                             .filterIsInstance<IrSimpleFunction>()
                             .find { it.name.asString() == "get" }!!.symbol
                     ).apply {
-                        dispatchReceiver = valuesCall
+                        dispatchReceiver = irCall(valuesFn.symbol)
                         putValueArgument(0, ordinal)
                     })
                 }
             }
         } else {
-            // Use name storage: read string, use valueOf(name)
             val nativeGetter = findLatticeNativeFunction(latticeNativeSymbol, if (isNullable) "getStringOrNull" else "getString")
-            if (nativeGetter == null || valueOfFn == null) {
-                messageCollector.report(
-                    CompilerMessageSeverity.WARNING,
-                    "Lattice: Cannot find LatticeNative.getString or valueOf for enum '$propertyName', skipping"
-                )
-                return
-            }
+            if (nativeGetter == null || valueOfFn == null) return
 
-            // Fall back instead of trapping on an unknown stored value. `valueOf`
-            // THROWS for a name that matches no entry — a value written by a newer
-            // client, or an entry removed since the row was written — where Swift's
-            // Lattice substitutes a default. Resolve the name through a runtime
-            // helper first so `valueOf` is guaranteed safe; the fallback index is
-            // computed here, at compile time, from @LatticeEnum(defaultValue).
             val enumEntryNames = enumClass.declarations
                 .filterIsInstance<IrEnumEntry>()
                 .map { it.name.asString() }
             val declaredDefault = getEnumDefaultValue(propertyType)
             val defaultIndex = enumEntryNames.indexOf(declaredDefault).takeIf { it >= 0 } ?: 0
-            if (declaredDefault.isNotEmpty() && enumEntryNames.none { it == declaredDefault }) {
-                messageCollector.report(
-                    CompilerMessageSeverity.WARNING,
-                    "Lattice: @LatticeEnum(defaultValue = \"$declaredDefault\") on '$propertyName' " +
-                        "names no entry of ${enumClass.name}; falling back to ${enumEntryNames.firstOrNull()}"
-                )
-            }
             val valuesFnForNames = enumClass.functions.find { it.name.asString() == "values" }
             val nameResolver = findLatticeNativeFunction(
                 latticeNativeSymbol,
@@ -2144,15 +2147,11 @@ class LatticeIrTransformer(
 
             getter.body = DeclarationIrBuilder(pluginContext, getter.symbol).irBlockBody {
                 val thisReceiver = getter.dispatchReceiverParameter!!
-
-                // val name = LatticeNative.getString(_latticeHandle, "propertyName")
                 val rawName = irCall(nativeGetter).apply {
                     dispatchReceiver = irGetObject(latticeNativeSymbol)
                     putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
                     putValueArgument(1, irString(propertyName))
                 }
-
-                // LatticeNative.enumNameOrDefault(EnumClass.values(), name, defaultIndex)
                 val nameValue = if (nameResolver != null && valuesFnForNames != null) {
                     irCall(nameResolver).apply {
                         dispatchReceiver = irGetObject(latticeNativeSymbol)
@@ -2160,12 +2159,9 @@ class LatticeIrTransformer(
                         putValueArgument(1, rawName)
                         if (!isNullable) putValueArgument(2, irInt(defaultIndex))
                     }
-                } else {
-                    rawName
-                }
+                } else rawName
 
                 if (isNullable) {
-                    // if (name == null || name.isEmpty()) return null else valueOf(name)
                     val nameVar = irTemporary(nameValue, nameHint = "enumName")
                     +irIfThenElse(
                         type = propertyType,
@@ -2176,7 +2172,6 @@ class LatticeIrTransformer(
                         })
                     )
                 } else {
-                    // return EnumClass.valueOf(name)
                     +irReturn(irCall(valueOfFn).apply {
                         putValueArgument(0, nameValue)
                     })
@@ -2185,18 +2180,7 @@ class LatticeIrTransformer(
         }
     }
 
-    /**
-     * Transform a @LatticeEnum property setter.
-     * Writes enum name (or ordinal) to C++.
-     *
-     * Generated code (storeAsOrdinal=false):
-     *   LatticeNative.setString(_latticeHandle, "propertyName", value.name)
-     *
-     * Generated code (storeAsOrdinal=true):
-     *   LatticeNative.setInt(_latticeHandle, "propertyName", value.ordinal)
-     */
     private fun transformEnumSetter(
-        irClass: IrClass,
         setter: IrSimpleFunction,
         handleField: IrField,
         propertyName: String,
@@ -2206,40 +2190,23 @@ class LatticeIrTransformer(
         val isNullable = propertyType.isNullable()
         val baseType = if (isNullable) propertyType.makeNotNull() else propertyType
         val storeAsOrdinal = getEnumStoreAsOrdinal(baseType)
-
-        val enumClass = baseType.classOrNull?.owner
-        if (enumClass == null) {
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: Cannot determine enum class for setter '$propertyName', skipping"
-            )
-            return
-        }
-
+        val enumClass = baseType.classOrNull?.owner ?: return
         val valueParam = setter.regularParameters.firstOrNull() ?: return
 
-        // Find name and ordinal properties on the enum
         val nameProp = enumClass.properties.find { it.name.asString() == "name" }
-            ?: pluginContext.referenceClass(ClassId.topLevel(FqName("kotlin.Enum")))?.owner?.properties?.find { it.name.asString() == "name" }
+            ?: pluginContext.referenceClass(ClassId.topLevel(FqName("kotlin.Enum")))
+                ?.owner?.properties?.find { it.name.asString() == "name" }
         val ordinalProp = enumClass.properties.find { it.name.asString() == "ordinal" }
-            ?: pluginContext.referenceClass(ClassId.topLevel(FqName("kotlin.Enum")))?.owner?.properties?.find { it.name.asString() == "ordinal" }
+            ?: pluginContext.referenceClass(ClassId.topLevel(FqName("kotlin.Enum")))
+                ?.owner?.properties?.find { it.name.asString() == "ordinal" }
 
         if (storeAsOrdinal) {
-            // Store as ordinal: value.ordinal
             val nativeSetter = findLatticeNativeFunction(latticeNativeSymbol, "setInt")
-            if (nativeSetter == null || ordinalProp?.getter == null) {
-                messageCollector.report(
-                    CompilerMessageSeverity.WARNING,
-                    "Lattice: Cannot find LatticeNative.setInt or ordinal property for enum '$propertyName', skipping"
-                )
-                return
-            }
+            if (nativeSetter == null || ordinalProp?.getter == null) return
 
             setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {
                 val thisReceiver = setter.dispatchReceiverParameter!!
-
                 if (isNullable) {
-                    // if (value != null) setInt(handle, name, value.ordinal) else setNull(handle, name)
                     val setNull = findLatticeNativeFunction(latticeNativeSymbol, "setNull")
                     +irIfThenElse(
                         type = irBuiltIns.unitType,
@@ -2268,7 +2235,6 @@ class LatticeIrTransformer(
                         }
                     )
                 } else {
-                    // LatticeNative.setInt(_latticeHandle, "propertyName", value.ordinal)
                     +irCall(nativeSetter).apply {
                         dispatchReceiver = irGetObject(latticeNativeSymbol)
                         putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
@@ -2280,21 +2246,12 @@ class LatticeIrTransformer(
                 }
             }
         } else {
-            // Store as name: value.name
             val nativeSetter = findLatticeNativeFunction(latticeNativeSymbol, "setString")
-            if (nativeSetter == null || nameProp?.getter == null) {
-                messageCollector.report(
-                    CompilerMessageSeverity.WARNING,
-                    "Lattice: Cannot find LatticeNative.setString or name property for enum '$propertyName', skipping"
-                )
-                return
-            }
+            if (nativeSetter == null || nameProp?.getter == null) return
 
             setter.body = DeclarationIrBuilder(pluginContext, setter.symbol).irBlockBody {
                 val thisReceiver = setter.dispatchReceiverParameter!!
-
                 if (isNullable) {
-                    // if (value != null) setString(handle, name, value.name) else setNull(handle, name)
                     val setNull = findLatticeNativeFunction(latticeNativeSymbol, "setNull")
                     +irIfThenElse(
                         type = irBuiltIns.unitType,
@@ -2323,7 +2280,6 @@ class LatticeIrTransformer(
                         }
                     )
                 } else {
-                    // LatticeNative.setString(_latticeHandle, "propertyName", value.name)
                     +irCall(nativeSetter).apply {
                         dispatchReceiver = irGetObject(latticeNativeSymbol)
                         putValueArgument(0, irGetField(irGet(thisReceiver), handleField))
@@ -2336,6 +2292,10 @@ class LatticeIrTransformer(
             }
         }
     }
+
+    // =========================================================================
+    // Type Classification Helpers
+    // =========================================================================
 
     private fun getNativeGetterName(type: IrType): String {
         val isNullable = type.isNullable()
@@ -2359,11 +2319,13 @@ class LatticeIrTransformer(
                 if (isNullable) "getFloatVectorOrNull" else "getFloatVector"
             isDoubleVector(baseType) ->
                 if (isNullable) "getDoubleVectorOrNull" else "getDoubleVector"
+            isGeoBounds(baseType) ->
+                if (isNullable) "getGeoBoundsOrNull" else "getGeoBounds"
             isInstant(baseType) ->
                 if (isNullable) "getInstantOrNull" else "getInstant"
             isUuid(baseType) ->
                 if (isNullable) "getUuidOrNull" else "getUuid"
-            else -> "getString" // Fallback
+            else -> "getString"
         }
     }
 
@@ -2379,18 +2341,16 @@ class LatticeIrTransformer(
             isByteArray(baseType) -> "setBlob"
             isFloatVector(baseType) -> "setFloatVector"
             isDoubleVector(baseType) -> "setDoubleVector"
+            isGeoBounds(baseType) -> "setGeoBounds"
             isInstant(baseType) -> "setInstant"
             isUuid(baseType) -> "setUuid"
-            else -> "setString" // Fallback
+            else -> "setString"
         }
     }
 
-    /**
-     * Check if the type is a native collection (List, MutableList, Set, Map, etc.)
-     * that should be serialized as JSON TEXT in Lattice.
-     */
     private fun isNativeCollection(type: IrType): Boolean {
-        val className = type.classOrNull?.owner?.name?.asString() ?: return false
+        val base = if (type.isNullable()) type.makeNotNull() else type
+        val className = base.classOrNull?.owner?.name?.asString() ?: return false
         return className in setOf(
             "List", "MutableList", "ArrayList",
             "Set", "MutableSet", "HashSet", "LinkedHashSet",
@@ -2398,94 +2358,42 @@ class LatticeIrTransformer(
         )
     }
 
-    private fun isByteArray(type: IrType): Boolean {
-        val classId = type.classOrNull?.owner?.classId ?: return false
-        return classId.asFqNameString() == "kotlin.ByteArray"
-    }
+    private fun isByteArray(type: IrType): Boolean =
+        type.classOrNull?.owner?.classId?.asFqNameString() == "kotlin.ByteArray"
 
-    private fun isFloatVector(type: IrType): Boolean {
-        val classId = type.classOrNull?.owner?.classId ?: return false
-        return classId.asFqNameString() == "com.lattice.FloatVector"
-    }
+    private fun isFloatVector(type: IrType): Boolean =
+        type.classOrNull?.owner?.classId?.asFqNameString() == "com.lattice.FloatVector"
 
-    private fun isDoubleVector(type: IrType): Boolean {
-        val classId = type.classOrNull?.owner?.classId ?: return false
-        return classId.asFqNameString() == "com.lattice.DoubleVector"
-    }
+    private fun isDoubleVector(type: IrType): Boolean =
+        type.classOrNull?.owner?.classId?.asFqNameString() == "com.lattice.DoubleVector"
 
-    private fun isInstant(type: IrType): Boolean {
-        val classId = type.classOrNull?.owner?.classId ?: return false
-        return classId.asFqNameString() == "kotlinx.datetime.Instant"
-    }
+    private fun isGeoBounds(type: IrType): Boolean =
+        type.classOrNull?.owner?.classId?.asFqNameString() == "com.lattice.GeoBounds"
 
-    private fun isUuid(type: IrType): Boolean {
-        val classId = type.classOrNull?.owner?.classId ?: return false
-        return classId.asFqNameString() == "kotlin.uuid.Uuid"
-    }
+    private fun isInstant(type: IrType): Boolean =
+        type.classOrNull?.owner?.classId?.asFqNameString() == "kotlinx.datetime.Instant"
 
-    /**
-     * Check if the type is an enum class annotated with @LatticeEnum.
-     */
+    private fun isUuid(type: IrType): Boolean =
+        type.classOrNull?.owner?.classId?.asFqNameString() == "kotlin.uuid.Uuid"
+
     private fun isLatticeEnum(type: IrType): Boolean {
         val classOwner = type.classOrNull?.owner ?: return false
-        // Check if it's an enum class
-        if (classOwner.kind != org.jetbrains.kotlin.descriptors.ClassKind.ENUM_CLASS) {
-            return false
-        }
-        // Check if it has @LatticeEnum annotation
+        if (classOwner.kind != ClassKind.ENUM_CLASS) return false
         return classOwner.hasAnnotation(latticeEnumAnnotationFqn)
     }
 
-    /**
-     * Get the storeAsOrdinal parameter from @LatticeEnum annotation.
-     * Returns false if not found.
-     */
     private fun getEnumStoreAsOrdinal(type: IrType): Boolean {
         val classOwner = type.classOrNull?.owner ?: return false
         val annotation = classOwner.annotations.find { ann ->
             ann.type.classOrNull?.owner?.fqNameWhenAvailable == latticeEnumAnnotationFqn
         } ?: return false
-
-        // Get the storeAsOrdinal parameter. In 2.4 `getValueArgument` is keyed by
-        // Name, not index — and an annotation argument left at its default is
-        // simply ABSENT, so a missing entry means `false` (the declared default).
         val arg = annotation.getValueArgument(Name.identifier("storeAsOrdinal"))
         return (arg as? IrConst)?.value as? Boolean ?: false
     }
 
-    /**
-     * `@Unique` support is single-column presence only: the schema-string flag
-     * bitfield has no carrier for `compoundedWith` columns or `allowsUpsert`.
-     * A model ported from Swift with either argument set would otherwise
-     * compile clean and silently enforce a WEAKER constraint than declared.
-     */
-    private fun warnOnUnsupportedUniqueArgs(prop: IrProperty) {
-        val annotation = prop.annotations.find { ann ->
-            ann.type.classOrNull?.owner?.fqNameWhenAvailable == uniqueAnnotationFqn
-        } ?: return
-        // An argument left at its default is ABSENT from the mapping (2.4 IR).
-        val hasCompound = annotation.getValueArgument(Name.identifier("compoundedWith")) != null
-        val hasUpsert = annotation.getValueArgument(Name.identifier("allowsUpsert")) != null
-        if (hasCompound || hasUpsert) {
-            val args = listOfNotNull(
-                "compoundedWith".takeIf { hasCompound },
-                "allowsUpsert".takeIf { hasUpsert },
-            ).joinToString(" and ")
-            messageCollector.report(
-                CompilerMessageSeverity.WARNING,
-                "Lattice: @Unique on '${prop.name.asString()}' sets $args, which the Kotlin " +
-                    "plugin does not support yet — only the single-column unique constraint is " +
-                    "emitted. The declared constraint is WEAKER than written."
-            )
-        }
-    }
-
-    /**
-     * The entry name from `@LatticeEnum(defaultValue = ...)`, or "" when absent
-     * (meaning: fall back to the first declared entry).
-     */
     private fun getEnumDefaultValue(type: IrType): String {
-        val classOwner = type.classOrNull?.owner ?: return ""
+        val base = if (type.isNullable()) type.makeNotNull() else type
+        val classOwner = base.classOrNull?.owner ?: return ""
         val annotation = classOwner.annotations.find { ann ->
             ann.type.classOrNull?.owner?.fqNameWhenAvailable == latticeEnumAnnotationFqn
         } ?: return ""
@@ -2501,14 +2409,12 @@ class LatticeIrTransformer(
     }
 }
 
-// Custom origin for generated declarations
 object LatticeDeclarationOrigin : IrDeclarationOrigin {
     override val name: String = "LATTICE_GENERATED"
     override val isSynthetic: Boolean = true
     override fun toString(): String = name
 }
 
-// Extension functions
 @OptIn(UnsafeDuringIrConstructionAPI::class)
 private fun IrClass.hasAnnotation(fqName: FqName): Boolean {
     return annotations.any { annotation ->
@@ -2523,33 +2429,9 @@ private fun IrProperty.hasAnnotation(fqName: FqName): Boolean {
     }
 }
 
-/**
- * The user-declared value parameters, excluding every receiver.
- *
- * Kotlin 2.2 (KT-68003) merged receivers into `IrFunction.parameters`, so on a
- * property setter `parameters.first()` is the DISPATCH RECEIVER, not the value.
- * A generated setter built from that stores `this` instead of `value` — and
- * compiles clean, which is why this needs a named helper rather than a rename.
- *
- * `nonDispatchParameters` is also wrong here: it keeps context parameters, which
- * Kotlin 2.2 added and which sort ahead of regular ones. Filter on kind.
- */
 private val IrFunction.regularParameters: List<IrValueParameter>
     get() = parameters.filter { it.kind == IrParameterKind.Regular }
 
-/**
- * Compatibility shim for the `putValueArgument(index, value)` removed in Kotlin
- * 2.2 (KT-68003), which merged receivers into a single `arguments` list.
- *
- * The mechanical migration is `arguments[index] = value`, but that index is NOT
- * the old one: it is offset by however many receivers and context parameters the
- * CALLEE happens to declare. Getting it wrong reorders arguments silently — the
- * types usually still line up, so it compiles and ships.
- *
- * Resolving the parameter from the callee's own list instead makes every call
- * site correct by construction, and preserves the original meaning exactly:
- * `index` is the i-th user-declared value parameter, receivers excluded.
- */
 private fun IrFunctionAccessExpression.putValueArgument(index: Int, valueArgument: IrExpression) {
     val regular = symbol.owner.parameters.filter { it.kind == IrParameterKind.Regular }
     require(index in regular.indices) {

@@ -48,7 +48,7 @@ get_latticeHandle()J
 
 get_latticeSchema()Ljava/util/List;
   FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
-  CONST "name:2:0:0::0,results:0:3:0::0,vector:3:0:0::0,optionalVector:3:0:1::0"
+  CONST "name:2:0:0::0,results:0:3:0::0,vector:3:0:0::8,optionalVector:3:0:1::8"
   INVOKE com/lattice/LatticeNative.buildSchemaFromString(Ljava/lang/String;)Ljava/util/List;
 
 get_latticeTableName()Ljava/lang/String;

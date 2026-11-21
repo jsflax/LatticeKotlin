@@ -32,12 +32,13 @@ import kotlinx.coroutines.sync.withLock
  * ```
  */
 class SyncTestServer {
-    private var engine: ApplicationEngine? = null
+    private var server: EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>? = null
     var port: Int = 0
         private set
 
-    // Connected WebSocket sessions
+    // Connected WebSocket sessions and retained catch-up frames for late joiners
     private val sessions = mutableListOf<DefaultWebSocketServerSession>()
+    private val auditHistory = mutableListOf<String>()
     private val mutex = Mutex()
 
     /**
@@ -45,12 +46,20 @@ class SyncTestServer {
      * @return The assigned port number
      */
     fun start(): Int {
-        engine = embeddedServer(CIO, port = 0) {
+        val srv = embeddedServer(CIO, port = 0) {
             install(WebSockets)
             routing {
                 webSocket("/sync") {
-                    // Register this session
-                    mutex.withLock { sessions.add(this) }
+                    // Register this session and replay any prior auditLog frames
+                    val catchUp = mutex.withLock {
+                        sessions.add(this)
+                        auditHistory.toList()
+                    }
+                    for (prior in catchUp) {
+                        try {
+                            send(Frame.Text(prior))
+                        } catch (_: Exception) {}
+                    }
 
                     try {
                         for (frame in incoming) {
@@ -67,12 +76,13 @@ class SyncTestServer {
                 }
             }
         }.start(wait = false)
+        server = srv
 
         // Read the assigned port from the engine
         // Give it a moment to bind, then read the resolved port
         platform.posix.usleep(500_000u) // 500ms
         port = kotlinx.coroutines.runBlocking {
-            (engine as? CIOApplicationEngine)?.resolvedConnectors()?.firstOrNull()?.port ?: 0
+            srv.engine.resolvedConnectors().firstOrNull()?.port ?: 0
         }
 
         if (port == 0) {
@@ -88,8 +98,8 @@ class SyncTestServer {
      * Stop the relay server.
      */
     fun stop() {
-        engine?.stop(gracePeriodMillis = 100, timeoutMillis = 500)
-        engine = null
+        server?.stop(gracePeriodMillis = 100, timeoutMillis = 500)
+        server = null
         println("SyncTestServer stopped")
     }
 
@@ -128,16 +138,16 @@ class SyncTestServer {
                     sender.send(Frame.Text(ackJson))
                 }
 
-                // Broadcast to all OTHER connected clients
-                mutex.withLock {
-                    for (session in sessions) {
-                        if (session != sender) {
-                            try {
-                                session.send(Frame.Text(text))
-                            } catch (_: Exception) {
-                                // Client disconnected, ignore
-                            }
-                        }
+                // Record for catch-up and broadcast to all OTHER connected clients
+                val others = mutex.withLock {
+                    auditHistory.add(text)
+                    sessions.filter { it != sender }
+                }
+                for (session in others) {
+                    try {
+                        session.send(Frame.Text(text))
+                    } catch (_: Exception) {
+                        // Client disconnected, ignore
                     }
                 }
             }

@@ -1,13 +1,14 @@
 package com.lattice
 
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.KSerializer
-import kotlinx.serialization.serializer
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.serializerOrNull
 import kotlin.reflect.KClass
 
 /**
  * JSON instance for embedded model serialization.
- * Uses lenient parsing to handle edge cases.
+ * Uses lenient parsing and encodes defaults for wire parity with Swift Codable.
  */
 val latticeJson = Json {
     ignoreUnknownKeys = true
@@ -16,24 +17,14 @@ val latticeJson = Json {
 }
 
 /**
- * Interface for embedded models.
- * Embedded models are stored as JSON strings in the database.
- *
- * Usage:
- * ```kotlin
- * @Embedded
- * @Serializable
- * data class Address(
- *     val street: String = "",
- *     val city: String = ""
- * ) : LatticeEmbedded
- * ```
+ * Optional marker interface for embedded models.
+ * Any `@Embedded @Serializable` class works automatically with or without implementing [LatticeEmbedded].
  */
 interface LatticeEmbedded
 
 /**
  * Registry of serializers for embedded types.
- * Call registerEmbeddedSerializer<YourType>() to register.
+ * Automatically falls back to `kClass.serializerOrNull()` for `@Serializable` types.
  */
 object EmbeddedSerializers {
     private val serializers = mutableMapOf<KClass<*>, KSerializer<*>>()
@@ -44,22 +35,38 @@ object EmbeddedSerializers {
         factories[kClass] = factory
     }
 
+    @OptIn(InternalSerializationApi::class)
     @Suppress("UNCHECKED_CAST")
     fun <T : Any> getSerializer(kClass: KClass<T>): KSerializer<T>? {
-        return serializers[kClass] as? KSerializer<T>
+        (serializers[kClass] as? KSerializer<T>)?.let { return it }
+        val resolved = try {
+            kClass.serializerOrNull()
+        } catch (_: Exception) {
+            null
+        }
+        if (resolved != null) {
+            serializers[kClass] = resolved
+        }
+        return resolved
     }
 
     @Suppress("UNCHECKED_CAST")
     fun <T : Any> getFactory(kClass: KClass<T>): (() -> T)? {
-        return factories[kClass] as? (() -> T)
+        (factories[kClass] as? (() -> T))?.let { return it }
+        val serializer = getSerializer(kClass)
+        if (serializer != null) {
+            return {
+                latticeJson.decodeFromString(serializer, "{}")
+            }
+        }
+        return null
     }
 
-    @Suppress("UNCHECKED_CAST")
     fun <T : Any> decode(kClass: KClass<T>, json: String): T? {
         val serializer = getSerializer(kClass) ?: return null
         return try {
             latticeJson.decodeFromString(serializer, json)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -68,17 +75,13 @@ object EmbeddedSerializers {
         val serializer = getSerializer(kClass) ?: return null
         return try {
             latticeJson.encodeToString(serializer, value)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
 }
 
-/**
- * Register an embedded type serializer.
- * Call this for each embedded type in your app initialization.
- */
-inline fun <reified T : LatticeEmbedded> registerEmbeddedSerializer(
+inline fun <reified T : Any> registerEmbeddedSerializer(
     serializer: KSerializer<T>,
     noinline factory: () -> T
 ) {

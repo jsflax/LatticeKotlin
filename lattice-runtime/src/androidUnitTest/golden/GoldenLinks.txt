@@ -45,7 +45,9 @@ getOne()Lcom/lattice/codegen/GoldenLinkTarget;
   CONST 0
   CONST null
   TYPE com/lattice/codegen/GoldenLinkTarget
-  INVOKE com/lattice/codegen/GoldenLinkTarget.<init>()V
+  LOAD 1
+  FIELD com/lattice/LatticeHydrationMarker.INSTANCE:Lcom/lattice/LatticeHydrationMarker;
+  INVOKE com/lattice/codegen/GoldenLinkTarget.<init>(JLcom/lattice/LatticeHydrationMarker;)V
   LOAD 3
   FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
   LOAD 3

@@ -1,24 +1,14 @@
 package com.lattice
 
 /**
- * Internal bridge to native Lattice C library.
+ * Internal bridge to native Lattice C library (`libLatticeCAPI`).
  * Platform-specific implementations use cinterop (Native) or JNI (Android/JVM).
- *
- * All handles are represented as Long values (pointers on native, JNI handles on JVM).
  */
 internal expect object NativeBridge {
     // ========== Database Lifecycle ==========
-
-    /** Create an in-memory database. Returns db handle or 0 on failure. */
     fun createDbInMemory(): Long
-
-    /** Create/open database at path. Returns db handle or 0 on failure. */
     fun createDbAtPath(path: String): Long
-
-    /** Create database with schemas. Returns db handle or 0 on failure. */
     fun createDbWithSchemas(path: String, schemasJson: String): Long
-
-    /** Create database with schemas and sync configuration. Returns db handle or 0 on failure. */
     fun createDbWithSync(
         path: String,
         schemasJson: String,
@@ -26,18 +16,6 @@ internal expect object NativeBridge {
         authToken: String
     ): Long
 
-    /**
-     * Create database with schema using flat arrays (avoids JSON parsing in JNI).
-     * Schema data is passed as parallel arrays:
-     * - tableNames: One entry per table
-     * - propertyCounts: Number of properties for each table
-     * - propNames, propTypes, etc: All properties flattened across all tables
-     *
-     * Types: 0=INTEGER, 1=REAL, 2=TEXT, 3=BLOB
-     * Kinds: 0=PRIMITIVE, 1=LINK, 2=LINK_LIST
-     *
-     * For sync, pass non-null syncEndpoint and authToken.
-     */
     fun createDbWithSchemaArrays(
         path: String,
         tableNames: Array<String>,
@@ -53,41 +31,63 @@ internal expect object NativeBridge {
         authToken: String?
     ): Long
 
-    /** Close and release database. */
-    /** Explicitly close DB connections and stop background services. Call before release. */
+    /**
+     * Full Schema v2 + Sync Options v2 + Migration open (`lattice_db_open_v2`),
+     * preserving `sizeof(lattice_property_t)` while passing `@NoHistory`, `@Union`,
+     * `@Property(name)`, compound `@Unique`, `targetSchemaVersion`, `busyTimeoutMs`,
+     * `uploadsEnabled`, `auditRetentionSeconds`, `pinnedServerCertificateSha256`, etc.
+     */
+    fun openDbV2(
+        path: String,
+        tableNames: Array<String>,
+        propertyCounts: IntArray,
+        propNames: Array<String>,
+        propColumnNames: Array<String?>,
+        propTypes: IntArray,
+        propKinds: IntArray,
+        propNullable: BooleanArray,
+        propTargetTables: Array<String?>,
+        propLinkTables: Array<String?>,
+        propFlags: IntArray,
+        propUnionSpecs: Array<String?>,
+        constraintTableNames: Array<String>,
+        constraintColumnsJoined: Array<String>,
+        constraintAllowsUpsert: BooleanArray,
+        schedulerHandle: Long,
+        syncEndpoint: String?,
+        authToken: String?,
+        targetSchemaVersion: Int,
+        busyTimeoutMs: Int,
+        auditRetentionSeconds: Long,
+        syncIsObserver: Int,
+        uploadsEnabled: Int,
+        syncAuthMode: Int,
+        websocketSyncIdentity: String?,
+        pinnedServerCertSha256: String?,
+        createIfMissing: Int,
+        readOnly: Int,
+        syncFilterJson: String?,
+        chunkSize: Long,
+        maxReconnectAttempts: Int,
+        uploadCoalesceMs: Int,
+        migrationTables: Array<String>,
+        migrationTransform: ((tableName: String, oldRowJson: String) -> String?)?
+    ): Long
+
     fun closeDb(dbHandle: Long)
-
     fun releaseDb(dbHandle: Long)
-
-    /** Get last error message. */
     fun getLastError(): String?
 
     // ========== Object Operations ==========
-
-    /** Add object to database. Returns managed object handle or 0 on failure. */
     fun addObject(dbHandle: Long, objectHandle: Long): Long
-
-    /** Release an object handle (drops the C-side reference). */
+    fun addObjectWithGlobalId(dbHandle: Long, objectHandle: Long, globalId: String): Long
     fun releaseObject(objectHandle: Long)
-
-    /** Find object by primary key. Returns object handle or 0 if not found. */
     fun findObject(dbHandle: Long, tableName: String, id: Long): Long
-
-    /** Find object by global ID. Returns object handle or 0 if not found. */
     fun findObjectByGlobalId(dbHandle: Long, tableName: String, globalId: String): Long
-
-    /** Remove object from database. Returns true on success. */
     fun removeObject(dbHandle: Long, objectHandle: Long): Boolean
 
     // ========== Query Operations ==========
-
-    /** Count objects matching query. */
     fun queryCount(dbHandle: Long, tableName: String, whereClause: String?): Int
-
-    /**
-     * Query objects. Returns array of object handles.
-     * Caller must free the results with freeQueryResults.
-     */
     fun queryObjects(
         dbHandle: Long,
         tableName: String,
@@ -96,154 +96,107 @@ internal expect object NativeBridge {
         limit: Int,
         offset: Long
     ): LongArray
-
-    /** Delete objects matching where clause. Returns count of deleted objects. */
     fun deleteWhere(dbHandle: Long, tableName: String, whereClause: String?): Int
 
     // ========== Transaction Operations ==========
-
-    /** Begin a transaction. Returns true on success. */
     fun beginTransaction(dbHandle: Long): Boolean
-
-    /** Commit current transaction. Returns true on success. */
     fun commitTransaction(dbHandle: Long): Boolean
-
-    /** Rollback current transaction. */
     fun rollbackTransaction(dbHandle: Long)
 
     // ========== Object Property Access ==========
-
-    /** Create a new unmanaged object with the given schema. Returns object handle. */
     fun createObject(tableName: String, schemaJson: String): Long
-
-    /** Get integer property from object. */
+    fun createObjectWithSchema(tableName: String, schemaJson: String): Long
+    fun createDbObject(dbHandle: Long, tableName: String): Long
     fun getIntProperty(objectHandle: Long, propertyName: String): Long
-
-    /** Set integer property on object. */
     fun setIntProperty(objectHandle: Long, propertyName: String, value: Long)
-
-    /** Get double property from object. */
     fun getDoubleProperty(objectHandle: Long, propertyName: String): Double
-
-    /** Set double property on object. */
     fun setDoubleProperty(objectHandle: Long, propertyName: String, value: Double)
-
-    /** Get string property from object. */
     fun getStringProperty(objectHandle: Long, propertyName: String): String?
-
-    /** Set string property on object. */
     fun setStringProperty(objectHandle: Long, propertyName: String, value: String?)
-
-    /** Get boolean property from object. */
     fun getBoolProperty(objectHandle: Long, propertyName: String): Boolean
-
-    /** Set boolean property on object. */
     fun setBoolProperty(objectHandle: Long, propertyName: String, value: Boolean)
-
-    /** Get the row ID of a managed object. */
     fun getObjectId(objectHandle: Long): Long
-
-    /** Get the global ID of a managed object. */
     fun getObjectGlobalId(objectHandle: Long): String?
-
-    /** Get the table name of an object. Used for VirtualList type resolution. */
     fun getObjectTableName(objectHandle: Long): String?
-
-    /** Check if property has a value (not NULL). */
     fun hasValue(objectHandle: Long, propertyName: String): Boolean
-
-    /** Set property to NULL. */
     fun setNull(objectHandle: Long, propertyName: String)
 
     // ========== Blob Property Access ==========
-
-    /** Get blob property size. Returns 0 if null or empty. */
     fun getBlobSize(objectHandle: Long, propertyName: String): Int
-
-    /** Get blob property data. */
     fun getBlobData(objectHandle: Long, propertyName: String, buffer: ByteArray): Int
-
-    /** Set blob property. */
     fun setBlobProperty(objectHandle: Long, propertyName: String, data: ByteArray?)
 
     // ========== Link Property Access ==========
-
-    /** Get linked object handle. Returns 0 if no link. */
     fun getLinkedObject(objectHandle: Long, propertyName: String): Long
-
-    /** Set linked object. */
     fun setLinkedObject(objectHandle: Long, propertyName: String, linkedHandle: Long?)
-
-    /** Get link list handle. Returns 0 if no list. */
     fun getLinkListHandle(objectHandle: Long, propertyName: String): Long
 
-    // ========== Object Creation ==========
+    // ========== Union Property Access (`lattice_union_value_t`) ==========
+    fun createUnionValue(caseName: String): Long
+    fun releaseUnionValue(uvHandle: Long)
+    fun getUnionCase(uvHandle: Long): String?
+    fun hasUnionField(uvHandle: Long, key: String): Boolean
+    fun getUnionInt(uvHandle: Long, key: String): Long
+    fun getUnionDouble(uvHandle: Long, key: String): Double
+    fun getUnionString(uvHandle: Long, key: String): String?
+    fun getUnionBlob(uvHandle: Long, key: String): ByteArray
+    fun getUnionLink(uvHandle: Long, key: String): Long
+    fun setUnionInt(uvHandle: Long, key: String, value: Long)
+    fun setUnionDouble(uvHandle: Long, key: String, value: Double)
+    fun setUnionString(uvHandle: Long, key: String, value: String)
+    fun setUnionBlob(uvHandle: Long, key: String, value: ByteArray)
+    fun setUnionLink(uvHandle: Long, key: String, objHandle: Long)
+    fun getObjectUnion(objectHandle: Long, propertyName: String): Long
+    fun setObjectUnion(objectHandle: Long, propertyName: String, uvHandle: Long): Boolean
+    fun clearObjectUnion(objectHandle: Long, propertyName: String): Boolean
 
-    /** Create object with schema (JSON-encoded). Returns object handle. */
-    fun createObjectWithSchema(tableName: String, schemaJson: String): Long
+    // ========== Row Cache, Atomic Increment, Detached JSON & Statement Counters ==========
+    fun enableRowCache(objectHandle: Long): Boolean
+    fun disableRowCache(objectHandle: Long): Boolean
+    fun refreshRowCache(objectHandle: Long): Boolean
+    fun isRowCacheEnabled(objectHandle: Long): Boolean
+    fun incrementInt(objectHandle: Long, propertyName: String, delta: Long): Boolean
+    fun objectToJson(objectHandle: Long, maxDepth: Int): String?
+    fun totalStatementCount(): Long
+    fun threadStatementCount(): Long
 
-    /** Create object using DB's registered schema. Returns object handle. */
-    fun createDbObject(dbHandle: Long, tableName: String): Long
-
-    // ========== Sync Operations ==========
-
-    /** Receive sync data from server. Returns JSON array of applied globalIds. */
+    // ========== Sync, Maintenance & Observers ==========
     fun receiveSyncData(dbHandle: Long, data: ByteArray): String?
-
-    /** Get audit log entries after checkpoint. Returns JSON. */
     fun getEventsAfter(dbHandle: Long, globalId: String?): String?
-
-    /** Get pending (unsynced) audit log entries. Returns JSON. */
     fun getPendingEvents(dbHandle: Long): String?
-
-    /** Mark entries as synchronized. */
     fun markSynced(dbHandle: Long, globalIdsJson: String)
-
-    /** Compact audit log — replace history with current state INSERTs. Returns entry count. */
     fun compactAuditLog(dbHandle: Long): Long
-
-    /** Check if sync WebSocket is connected. */
+    fun pruneAuditLog(dbHandle: Long, retentionSeconds: Long): Long
+    fun recordAuditWatermark(dbHandle: Long): Boolean
+    fun reclaimSpace(dbHandle: Long): Long
+    fun checkpointDb(dbHandle: Long, truncate: Boolean): Boolean
+    fun setSyncFilter(dbHandle: Long, filterJson: String): Boolean
+    fun clearSyncFilter(dbHandle: Long): Boolean
     fun isSyncConnected(dbHandle: Long): Boolean
+    fun getSyncProgress(dbHandle: Long): LongArray // [pendingUpload, totalUpload, acked, received]
+    fun observeSyncState(dbHandle: Long, callback: (Boolean) -> Unit): Long
+    fun observeSyncProgress(dbHandle: Long, callback: (Long, Long, Long, Long) -> Unit): Long
+    fun observeSyncError(dbHandle: Long, callback: (String) -> Unit): Long
+    fun removeSyncObserver(dbHandle: Long, token: Long)
 
     // ========== Results Operations ==========
-
-    /** Get count of query results. */
     fun resultsCount(resultsHandle: Long): Int
-
-    /** Get object at index from results. Returns object handle. */
     fun resultsGet(resultsHandle: Long, index: Int): Long
-
-    /** Free query results. */
     fun resultsFree(resultsHandle: Long)
 
     // ========== Link List Operations ==========
-
-    /** Get count of items in link list. */
     fun linkListCount(listHandle: Long): Int
-
-    /** Get object at index in link list. Returns object handle. */
     fun linkListGet(listHandle: Long, index: Int): Long
-
-    /** Append object to link list. */
     fun linkListAppend(listHandle: Long, objectHandle: Long)
-
-    /** Insert object at index in link list. */
     fun linkListInsert(listHandle: Long, index: Int, objectHandle: Long)
-
-    /** Remove object at index from link list. */
     fun linkListRemove(listHandle: Long, index: Int)
-
-    /** Clear all objects from link list. */
     fun linkListClear(listHandle: Long)
+    fun linkListRelease(listHandle: Long)
 
     // ========== String Memory ==========
-
-    /** Free a string returned by native code. */
     fun freeString(ptr: Long)
 
     // ========== Query Extensions ==========
-
-    /** Query with DISTINCT (GROUP BY) on a column. Returns results handle. */
     fun queryDistinct(
         dbHandle: Long,
         tableName: String,
@@ -254,7 +207,6 @@ internal expect object NativeBridge {
         offset: Long
     ): Long
 
-    /** Count with DISTINCT/GROUP BY support. */
     fun countDistinct(
         dbHandle: Long,
         tableName: String,
@@ -263,7 +215,6 @@ internal expect object NativeBridge {
         distinctBy: String?
     ): Int
 
-    /** Full-text search query. Returns results handle. */
     fun queryFts(
         dbHandle: Long,
         tableName: String,
@@ -273,13 +224,32 @@ internal expect object NativeBridge {
         limit: Long
     ): Long
 
+    /** Returns parallel results: pairs of (globalId, distance) encoded via [outDistances]. */
+    fun queryNearest(
+        dbHandle: Long,
+        tableName: String,
+        columnName: String,
+        queryVectorBytes: ByteArray,
+        k: Int,
+        metricOrdinal: Int,
+        whereClause: String?,
+        outDistances: DoubleArray
+    ): Array<String>
+
+    fun queryWithinBounds(
+        dbHandle: Long,
+        tableName: String,
+        columnName: String,
+        minLat: Double,
+        maxLat: Double,
+        minLon: Double,
+        maxLon: Double,
+        whereClause: String?,
+        limit: Long
+    ): LongArray
+
     // ========== Database Attachment ==========
-
-    /** Attach another database for cross-DB queries. */
     fun attachDb(dbHandle: Long, otherHandle: Long): Boolean
-
-    // ========== Add with preserved global ID ==========
-
-    /** Add an object with a specific globalId. Returns object handle. */
-    fun addObjectWithGlobalId(dbHandle: Long, objectHandle: Long, globalId: String): Long
+    fun detachDb(dbHandle: Long, otherHandle: Long): Boolean
+    fun lastAttachError(dbHandle: Long): String?
 }

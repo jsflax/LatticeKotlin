@@ -2,7 +2,9 @@ package com.lattice.conformance
 
 import com.lattice.BetweenExpr
 import com.lattice.CompareExpr
+import com.lattice.DistanceMetric
 import com.lattice.FloatVector
+import com.lattice.GeoBounds
 import com.lattice.InExpr
 import com.lattice.Lattice
 import com.lattice.LatticeException
@@ -68,18 +70,13 @@ import kotlinx.serialization.json.long
  */
 internal const val FORMAT_VERSION = 1
 
-internal val CAPABILITIES: Set<String> = emptySet()
+internal val CAPABILITIES: Set<String> = setOf("row-cache", "increment", "geo")
 
 /** Human rationale printed with each capability skip (loud, never silent). */
 internal val CAPABILITY_SKIP_RATIONALE: Map<String, String> = mapOf(
-    "geo" to "GeoBounds is schema-less in the Kotlin binding: no compiler-plugin property support, " +
-        "is_geo_bounds hard-coded false at DB creation, lattice_db_query_within_bounds unwrapped",
     "virtual" to "VirtualLink is inert in the Kotlin binding (compiler plugin never emits kind " +
         "VIRTUAL_LINK); virtuals.yaml's CfBinder.main requires it (VirtualList alone is wired)",
-    "migration-row-transform" to "lattice_db_create_with_migration is not wrapped by NativeBridge; " +
-        "Migration/LatticeConfigurationWithMigration are inert data classes",
-    "row-cache" to "lattice_object_*_row_cache C-ABI entry points are not wrapped by NativeBridge",
-    "increment" to "lattice_object_increment_int is not wrapped by NativeBridge",
+    "migration-row-transform" to "Corpus migration scenarios reuse CfBlobDoc@v2 with differing inline column shapes",
 )
 
 /** Malformed corpus / unknown vocabulary. Hard error, never a skip. */
@@ -116,6 +113,8 @@ private class Env(val dbPath: String) {
 
     /** Validate the scenario's inline schema against the compiled catalog, then open. */
     fun open(schema: JsonObject) {
+        db?.close()
+        db = null
         schemaVersion = schema["version"]?.jsonPrimitive?.int ?: 1
         val tables = schema["tables"]?.jsonObject
             ?: throw CorpusError("schema has no tables")
@@ -218,6 +217,17 @@ private fun convertValue(env: Env, table: String, prop: String, v: JsonElement):
             val name = it.jsonPrimitive.content
             return env.handles[name] ?: throw CorpusError("unknown handle: $name")
         }
+        if (pdef.type == "geo") {
+            if ("lat" in v && "lon" in v) {
+                return GeoBounds.point(v.getValue("lat").jsonPrimitive.double, v.getValue("lon").jsonPrimitive.double)
+            }
+            return GeoBounds(
+                minLat = v.getValue("min_lat").jsonPrimitive.double,
+                maxLat = v.getValue("max_lat").jsonPrimitive.double,
+                minLon = v.getValue("min_lon").jsonPrimitive.double,
+                maxLon = v.getValue("max_lon").jsonPrimitive.double,
+            )
+        }
         throw CorpusError("unknown value form for $table.$prop: $v")
     }
     return when (pdef.type) {
@@ -239,6 +249,14 @@ private fun canonicalize(value: Any?, type: String): JsonElement = when {
     type == "string" -> JsonPrimitive(value as String)
     type == "bytes" -> buildJsonObject { put("\$hex", JsonPrimitive(bytesToHex(value as ByteArray))) }
     type == "vector" -> JsonArray((value as FloatVector).map { JsonPrimitive(it.toDouble()) })
+    type == "geo" -> {
+        val g = value as GeoBounds
+        if (g.isPoint) buildJsonObject { put("lat", JsonPrimitive(g.minLat)); put("lon", JsonPrimitive(g.minLon)) }
+        else buildJsonObject {
+            put("min_lat", JsonPrimitive(g.minLat)); put("max_lat", JsonPrimitive(g.maxLat))
+            put("min_lon", JsonPrimitive(g.minLon)); put("max_lon", JsonPrimitive(g.maxLon))
+        }
+    }
     else -> throw CorpusError("cannot canonicalize value of corpus type '$type'")
 }
 
@@ -514,15 +532,41 @@ private fun dispatch(env: Env, op: JsonObject) {
             env.vars[op.getValue("save").jsonPrimitive.content] = extractRows(env, q.toList(), columns)
         }
 
-        "knn" -> throw ScenarioFailure(
-            "op 'knn': latticekotlin has no public KNN query API — DistanceMetric/NearestMatch are " +
-                "inert data classes, Results has no nearest(), and the C ABI's " +
-                "lattice_db_query_nearest is not wrapped by NativeBridge"
-        )
+        "knn" -> {
+            val spec = env.spec(op.getValue("table").jsonPrimitive.content)
+            val q = buildResults(env, spec, op)
+            val queryVec = FloatVector(op.getValue("query").jsonArray.map { it.jsonPrimitive.float })
+            val metric = when (val m = op["metric"]?.jsonPrimitive?.content ?: "l2") {
+                "l2" -> DistanceMetric.L2
+                "cosine" -> DistanceMetric.COSINE
+                "l1" -> DistanceMetric.L1
+                else -> throw CorpusError("unknown knn metric: '$m'")
+            }
+            val matches = q.nearest(
+                to = queryVec,
+                on = op.getValue("column").jsonPrimitive.content,
+                k = op.getValue("k").jsonPrimitive.int,
+                metric = metric
+            )
+            val columns = op.getValue("columns").jsonArray.map { it.jsonPrimitive.content }
+            env.vars[op.getValue("save").jsonPrimitive.content] = extractRows(env, matches.map { it.`object` }, columns)
+            op["save_distances"]?.let { distVar ->
+                env.vars[distVar.jsonPrimitive.content] = JsonArray(matches.map { JsonPrimitive(it.distance) })
+            }
+        }
 
-        "geo_within" ->
-            // Gated behind `geo`, which this runner does not declare.
-            throw CorpusError("op 'geo_within' requires the geo capability, which latticekotlin does not declare")
+        "geo_within" -> {
+            val spec = env.spec(op.getValue("table").jsonPrimitive.content)
+            val objs = buildResults(env, spec, op).withinBounds(
+                on = op.getValue("column").jsonPrimitive.content,
+                minLat = op.getValue("min_lat").jsonPrimitive.double,
+                maxLat = op.getValue("max_lat").jsonPrimitive.double,
+                minLon = op.getValue("min_lon").jsonPrimitive.double,
+                maxLon = op.getValue("max_lon").jsonPrimitive.double,
+            )
+            val columns = op.getValue("columns").jsonArray.map { it.jsonPrimitive.content }
+            env.vars[op.getValue("save").jsonPrimitive.content] = extractRows(env, objs, columns)
+        }
 
         "list_append" -> {
             val obj = handleOf(env, op)
@@ -570,10 +614,13 @@ private fun dispatch(env: Env, op: JsonObject) {
 
         "reopen" -> opReopen(env, op)
 
-        "materialize", "dematerialize", "refresh", "increment" ->
-            // In the corpus vocabulary but gated behind row-cache/increment,
-            // which this runner does not declare (not wrapped by latticekotlin).
-            throw CorpusError("op '$name' requires a capability latticekotlin does not declare")
+        "materialize" -> handleOf(env, op).enableRowCache()
+        "dematerialize" -> handleOf(env, op).disableRowCache()
+        "refresh" -> handleOf(env, op).refreshRowCache()
+        "increment" -> handleOf(env, op).incrementInt(
+            property = op.getValue("field").jsonPrimitive.content,
+            delta = op.getValue("by").jsonPrimitive.long
+        )
 
         "abort" -> throw CorpusError("'abort' is only valid inside a transaction block")
 

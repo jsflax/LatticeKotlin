@@ -109,6 +109,17 @@ object LatticeNetworkBridge {
                 staticCFunction(::sendCallback)
             ) ?: throw IllegalStateException("Failed to create websocket client")
 
+            lattice_websocket_client_set_configure_pin(
+                cClient,
+                stableRef.asCPointer(),
+                staticCFunction(::configurePinCallback)
+            )
+            lattice_websocket_client_set_on_destroy(
+                cClient,
+                stableRef.asCPointer(),
+                staticCFunction(::destroyClientCallback)
+            )
+
             // Wire up event handlers
             webSocket.onOpen = { triggerOnOpen() }
             webSocket.onMessage = { type, data -> triggerOnMessage(type, data) }
@@ -116,7 +127,16 @@ object LatticeNetworkBridge {
             webSocket.onClose = { code, reason -> triggerOnClose(code, reason) }
         }
 
+        fun configurePin(sha256Hex: String): Boolean = webSocket.configureCertificatePin(sha256Hex)
+
         fun release() {
+            webSocket.onOpen = null
+            webSocket.onMessage = null
+            webSocket.onError = null
+            webSocket.onClose = null
+            try {
+                webSocket.close()
+            } catch (_: Throwable) {}
             activeWebSockets.remove(bridgeId)
             stableRef.dispose()
         }
@@ -276,4 +296,18 @@ private fun sendCallback(userData: COpaquePointer?, type: lattice_websocket_msg_
     }
 
     bridge.send(type, bytes)
+}
+
+@OptIn(ExperimentalForeignApi::class)
+private fun configurePinCallback(userData: COpaquePointer?, sha256Hex: CPointer<ByteVar>?): Boolean {
+    if (userData == null) return false
+    val bridge = userData.asStableRef<LatticeNetworkBridge.WebSocketBridge>().get()
+    return bridge.configurePin(sha256Hex?.toKString() ?: "")
+}
+
+@OptIn(ExperimentalForeignApi::class)
+private fun destroyClientCallback(userData: COpaquePointer?) {
+    if (userData == null) return
+    val bridge = userData.asStableRef<LatticeNetworkBridge.WebSocketBridge>().get()
+    bridge.release()
 }

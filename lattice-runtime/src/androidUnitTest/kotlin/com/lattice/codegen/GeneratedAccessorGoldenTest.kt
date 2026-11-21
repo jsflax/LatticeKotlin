@@ -243,6 +243,7 @@ class GeneratedAccessorGoldenTest {
             GoldenEnums::class.java,
             GoldenConstraints::class.java,
             GoldenVirtuals::class.java,
+            GoldenUnionsAndNoHistory::class.java,
         )
     }
 }

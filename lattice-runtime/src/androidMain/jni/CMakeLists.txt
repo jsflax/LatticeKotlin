@@ -12,12 +12,21 @@ set_target_properties(LatticeCAPI PROPERTIES
     IMPORTED_LOCATION ${LATTICE_LIB_DIR}/libLatticeCAPI.so
 )
 
-# Include directory for lattice.h
-include_directories(${CMAKE_SOURCE_DIR}/../../../libs)
+# Include directory for lattice.h (check libs/ first, fall back to LatticeCore submodule header)
+include_directories(
+    ${CMAKE_SOURCE_DIR}/../../../libs
+    ${CMAKE_SOURCE_DIR}/../../../../LatticeCore/Sources/LatticeCAPI/include
+)
 
 # Build the JNI bridge library
 add_library(lattice_jni SHARED
     lattice_jni.c
+)
+
+# Enforce Android 15/16 mandatory 16 KB ELF page alignment
+target_link_options(lattice_jni PRIVATE
+    "-Wl,-z,max-page-size=16384"
+    "-Wl,-z,common-page-size=16384"
 )
 
 # Link against the Lattice C API and Android log

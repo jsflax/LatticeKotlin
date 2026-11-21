@@ -3,12 +3,17 @@ package com.lattice.codegen
 import com.lattice.Embedded
 import com.lattice.FloatVector
 import com.lattice.FullText
+import com.lattice.GeoBounds
 import com.lattice.Indexed
 import com.lattice.LatticeEmbedded
 import com.lattice.LatticeEnum
 import com.lattice.LatticeList
 import com.lattice.Link
 import com.lattice.Model
+import com.lattice.NoHistory
+import com.lattice.Property
+import com.lattice.Union
+import com.lattice.UnionCase
 import com.lattice.Unique
 import com.lattice.VirtualList
 import com.lattice.VirtualModel
@@ -178,4 +183,38 @@ class GoldenEnums {
     var statusOpt: GoldenStatus? = null
     var severity: GoldenSeverity = GoldenSeverity.TRIAGE
     var severityOpt: GoldenSeverity? = null
+}
+
+@Union
+@Serializable
+sealed interface GoldenSignal {
+    @UnionCase("none")
+    @Serializable
+    data object None : GoldenSignal
+
+    @UnionCase("note")
+    @Serializable
+    data class Note(val text: String = "") : GoldenSignal
+
+    @UnionCase("address")
+    @Serializable
+    data class AddressWrap(val value: GoldenAddress = GoldenAddress()) : GoldenSignal
+}
+
+@Model(tableName = "custom_golden_v312")
+class GoldenUnionsAndNoHistory {
+    @NoHistory
+    var streamedText: String = ""
+
+    @NoHistory
+    var segments: List<GoldenAddress> = emptyList()
+
+    var priorities: Set<GoldenPriority> = emptySet()
+
+    @Property(name = "custom_col")
+    var mappedProp: String = ""
+
+    var bounds: GeoBounds = GeoBounds(0.0, 0.0, 0.0, 0.0)
+
+    var signal: GoldenSignal = GoldenSignal.None
 }

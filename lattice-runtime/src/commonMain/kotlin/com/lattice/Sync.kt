@@ -2,9 +2,6 @@ package com.lattice
 
 import kotlinx.serialization.Serializable
 
-/**
- * Operation type for audit log entries.
- */
 @LatticeEnum
 enum class Operation {
     INSERT,
@@ -13,62 +10,53 @@ enum class Operation {
 }
 
 /**
- * AuditLog entry tracking database changes for sync.
- * Each INSERT, UPDATE, or DELETE creates an entry.
+ * Sync authentication mode (mirrors `lattice::sync_authentication`).
  */
-@Model
-class AuditLog {
-    /** The type of operation: INSERT, UPDATE, or DELETE */
-    var operation: Operation = Operation.INSERT
-
-    /** The table name that was modified */
-    var tableName: String = ""
-
-    /** The local row ID of the modified object */
-    var rowId: Long = 0L
-
-    /** The global ID of the modified object (for sync identification) */
-    var rowGlobalId: String = ""
-
-    /** Unix timestamp when the change occurred (milliseconds) */
-    var timestamp: Long = 0L
-
-    /** JSON-encoded map of changed field names to their new values */
-    var changed: String = "{}"
+enum class SyncAuthMode(val code: Int) {
+    /** Requires non-empty [LatticeConfiguration.authorizationToken]. */
+    BEARER_TOKEN(0),
+    /** Transport manages credentials externally (e.g. custom headers / IPC). */
+    TRANSPORT_MANAGED(1)
 }
 
 /**
- * Server-sent event types for sync protocol.
+ * Snapshot of upload/download sync progress across attached synchronizers.
  */
+data class SyncProgress(
+    val pendingUpload: Long = 0L,
+    val totalUpload: Long = 0L,
+    val acked: Long = 0L,
+    val received: Long = 0L
+)
+
+@Model
+class AuditLog {
+    var operation: Operation = Operation.INSERT
+    var tableName: String = ""
+    var rowId: Long = 0L
+    var rowGlobalId: String = ""
+    var timestamp: Long = 0L
+    var changed: String = "{}"
+}
+
 @Serializable
 sealed class ServerSentEvent {
-    /**
-     * Full model data sent when a client first connects or needs to resync.
-     * Contains the complete JSON representation of an object.
-     */
     @Serializable
     data class FullModel(
         val tableName: String,
         val globalId: String,
-        val data: String  // JSON-encoded object data
+        val data: String
     ) : ServerSentEvent()
 
-    /**
-     * Model change event sent when another client makes a modification.
-     * Contains the change delta.
-     */
     @Serializable
     data class ModelChange(
         val tableName: String,
-        val operation: String,  // "INSERT", "UPDATE", or "DELETE"
+        val operation: String,
         val globalId: String,
-        val data: String  // JSON-encoded changed fields
+        val data: String
     ) : ServerSentEvent()
 }
 
-/**
- * Response from the sync server containing events to apply.
- */
 @Serializable
 data class SyncResponse(
     val events: List<ServerSentEvent>,
