@@ -2,67 +2,85 @@
 """
 Build script for LatticeKotlin.
 
-Builds the LatticeCpp library and copies it into the Kotlin project.
-Supports both native builds and Android cross-compilation.
+Builds the LatticeCAPI native library (and host JNI library for JVM unit tests)
+and copies it into the Kotlin project. Supports both host builds and Android
+NDK r27c cross-compilation with mandatory Android 15/16 16 KB ELF page alignment.
 """
-import subprocess
-import shutil
-import sys
 import os
+import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
-# Paths
 SCRIPT_DIR = Path(__file__).parent.resolve()
-LATTICE_CPP_DIR = SCRIPT_DIR / "LatticeCore"
+LATTICE_CPP_DIR = Path(os.environ.get("LATTICE_CORE_DIR", str(SCRIPT_DIR / "LatticeCore"))).resolve()
 LIBS_DIR = SCRIPT_DIR / "lattice-runtime" / "libs"
-CMAKE_BUILD_DIR = LATTICE_CPP_DIR / "cmake-build"
+BUILD_ROOT = Path(os.environ.get("LATTICE_CMAKE_BUILD_ROOT", str(LATTICE_CPP_DIR))).resolve()
+CMAKE_BUILD_DIR = BUILD_ROOT / "cmake-build"
 
-# Android paths
 ANDROID_JNI_LIBS_DIR = SCRIPT_DIR / "lattice-runtime" / "src" / "androidMain" / "jniLibs"
+JNI_SRC = SCRIPT_DIR / "lattice-runtime" / "src" / "androidMain" / "jni" / "lattice_jni.c"
 ANDROID_ABIS = {
     "arm64-v8a": "aarch64-linux-android",
     "x86_64": "x86_64-linux-android",
 }
+PREFERRED_NDK_VERSION = "27.2.12479018"
 
 
 def find_android_ndk() -> Path | None:
-    """Find the Android NDK installation."""
-    # Check common locations
-    candidates = [
-        Path(os.environ.get("ANDROID_NDK_HOME", "")),
-        Path(os.environ.get("ANDROID_NDK_ROOT", "")),
-        Path(os.environ.get("NDK_HOME", "")),
-        Path.home() / "Library/Android/sdk/ndk",  # macOS Android Studio
-        Path.home() / "Android/Sdk/ndk",  # Linux
-        Path("/usr/local/android-ndk"),
+    """Find the Android NDK installation, preferring NDK r27c (27.2.12479018)."""
+    env_candidates = [
+        os.environ.get("ANDROID_NDK_HOME", ""),
+        os.environ.get("ANDROID_NDK_ROOT", ""),
+        os.environ.get("NDK_HOME", ""),
     ]
+    for raw in env_candidates:
+        if raw:
+            p = Path(raw)
+            if (p / "ndk-build").exists():
+                return p
 
-    for candidate in candidates:
-        if not candidate or not candidate.exists():
+    sdk_roots = [
+        Path.home() / "Library/Android/sdk/ndk",
+        Path.home() / "Android/Sdk/ndk",
+        Path("/usr/local/lib/android/sdk/ndk"),
+    ]
+    for root in sdk_roots:
+        if not root.exists():
             continue
-        # NDK directory contains ndk-build
-        if (candidate / "ndk-build").exists():
-            return candidate
-        # Or it might be a directory containing versioned NDKs
-        for sub in sorted(candidate.iterdir(), reverse=True):
+        preferred = root / PREFERRED_NDK_VERSION
+        if (preferred / "ndk-build").exists():
+            return preferred
+        r27c = root / "android-ndk-r27c"
+        if (r27c / "ndk-build").exists():
+            return r27c
+        for sub in sorted(root.iterdir(), reverse=True):
             if (sub / "ndk-build").exists():
                 return sub
+    return None
 
+
+def find_ndk_tool(ndk_path: Path, tool_name: str) -> Path | None:
+    prebuilt = ndk_path / "toolchains" / "llvm" / "prebuilt"
+    if not prebuilt.exists():
+        return None
+    for host_dir in sorted(prebuilt.iterdir()):
+        candidate = host_dir / "bin" / tool_name
+        if candidate.exists():
+            return candidate
     return None
 
 
 def get_lib_name() -> str:
-    """Get platform-specific library name."""
     if sys.platform == "darwin":
         return "libLatticeCAPI.dylib"
     elif sys.platform == "win32":
         return "LatticeCAPI.dll"
-    else:
-        return "libLatticeCAPI.so"
+    return "libLatticeCAPI.so"
 
 
-def run_command(cmd: list[str], cwd: Path = None, env: dict = None) -> None:
-    """Run a command and raise on failure."""
+def run_command(cmd: list[str], cwd: Path = None, env: dict = None) -> str:
     print(f"Running: {' '.join(cmd)}")
     result = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True)
     if result.returncode != 0:
@@ -71,88 +89,124 @@ def run_command(cmd: list[str], cwd: Path = None, env: dict = None) -> None:
         raise RuntimeError(f"Command failed: {' '.join(cmd)}")
     if result.stdout.strip():
         print(result.stdout)
+    return result.stdout
 
 
 def configure_cmake() -> None:
-    """Configure the CMake build."""
     print(f"\nConfiguring CMake in {CMAKE_BUILD_DIR}...")
-
     if not LATTICE_CPP_DIR.exists():
-        raise RuntimeError(f"LatticeCpp not found at {LATTICE_CPP_DIR}")
-
+        raise RuntimeError(f"LatticeCore not found at {LATTICE_CPP_DIR}")
     CMAKE_BUILD_DIR.mkdir(parents=True, exist_ok=True)
-
     cmake_args = [
         "cmake",
         str(LATTICE_CPP_DIR),
         "-DCMAKE_BUILD_TYPE=Release",
     ]
-
     run_command(cmake_args, cwd=CMAKE_BUILD_DIR)
 
 
 def build_cmake() -> None:
-    """Build using CMake."""
-    print("\nBuilding with CMake...")
-
+    print("\nBuilding LatticeCAPI with CMake...")
     build_args = [
         "cmake",
         "--build", str(CMAKE_BUILD_DIR),
         "--config", "Release",
-        "--parallel",
+        "--target", "LatticeCAPI",
+        "--parallel", "4",
     ]
-
     run_command(build_args)
 
 
-def copy_library() -> None:
-    """Copy the built library into the Kotlin project."""
-    lib_name = get_lib_name()
-    src = CMAKE_BUILD_DIR / lib_name
+def find_java_home() -> Path | None:
+    env_jh = os.environ.get("JAVA_HOME", "")
+    if env_jh and (Path(env_jh) / "include" / "jni.h").exists():
+        return Path(env_jh)
+    candidates = [
+        Path.home() / ".sdkman/candidates/java/current",
+        Path.home() / ".sdkman/candidates/java/17.0.9-tem",
+        Path("/Applications/Android Studio.app/Contents/jbr/Contents/Home"),
+    ]
+    for c in candidates:
+        if (c / "include" / "jni.h").exists():
+            return c
+    return None
 
+
+def build_host_jni() -> None:
+    """Build host liblattice_jni.{dylib,so} so JVM unit tests can exercise JNI on macOS/Linux."""
+    java_home = find_java_home()
+    if java_home is None or not JNI_SRC.exists():
+        print("Skipping host JNI build (JAVA_HOME with include/jni.h not found)")
+        return
+    os_inc = "darwin" if sys.platform == "darwin" else "linux"
+    out_name = "liblattice_jni.dylib" if sys.platform == "darwin" else "liblattice_jni.so"
+    out_path = LIBS_DIR / out_name
+    cc = os.environ.get("CC", "clang")
+    cmd = [
+        cc, "-shared", "-fPIC", "-O2",
+        f"-I{java_home / 'include'}",
+        f"-I{java_home / 'include' / os_inc}",
+        f"-I{LIBS_DIR}",
+        str(JNI_SRC),
+        f"-L{LIBS_DIR}", "-lLatticeCAPI",
+        "-o", str(out_path),
+    ]
+    if sys.platform == "darwin":
+        cmd.extend(["-Wl,-rpath,@loader_path"])
+    else:
+        cmd.extend(["-Wl,-rpath,$ORIGIN", "-lpthread"])
+    run_command(cmd)
+    print(f"Built host JNI library: {out_path}")
+
+
+def copy_library(src_dir: Path | None = None) -> None:
+    build_dir = src_dir or CMAKE_BUILD_DIR
+    lib_name = get_lib_name()
+    src = build_dir / lib_name
     if not src.exists():
         raise RuntimeError(f"Built library not found at {src}")
 
-    # Create libs directory
     LIBS_DIR.mkdir(parents=True, exist_ok=True)
-
-    # Copy the library under every name CMake produced (the unversioned
-    # linker name plus soname/realname variants like libLatticeCAPI.0.dylib).
-    # Since LatticeCore 1.0.0-rc.1 the install name is the versioned soname,
-    # so the runtime loader needs the versioned file present too.
-    # copy2 dereferences symlinks, so each name becomes a regular file.
-    stem = lib_name.split(".")[0]  # e.g. "libLatticeCAPI"
-    for candidate in sorted(CMAKE_BUILD_DIR.glob(f"{stem}*")):
+    stem = lib_name.split(".")[0]
+    for candidate in sorted(build_dir.glob(f"{stem}*")):
         dst = LIBS_DIR / candidate.name
-        print(f"\nCopying {candidate} -> {dst}")
+        print(f"Copying {candidate} -> {dst}")
         shutil.copy2(candidate, dst)
 
-    # Copy the C header
     header_src = LATTICE_CPP_DIR / "Sources" / "LatticeCAPI" / "include" / "lattice.h"
     if header_src.exists():
         header_dst = LIBS_DIR / "lattice.h"
-        print(f"Copying {header_src} -> {header_dst}")
         shutil.copy2(header_src, header_dst)
 
-    print("\nLibrary copied successfully!")
+    build_host_jni()
+    print("\nHost library + JNI copied successfully!")
 
 
-def clean() -> None:
-    """Clean build artifacts."""
-    print("Cleaning build artifacts...")
-
-    if LIBS_DIR.exists():
-        shutil.rmtree(LIBS_DIR)
-        print(f"Removed {LIBS_DIR}")
+def verify_16kb_alignment(ndk_path: Path, so_path: Path) -> None:
+    readobj = find_ndk_tool(ndk_path, "llvm-readobj")
+    if readobj is None:
+        return
+    out = subprocess.check_output([str(readobj), "-l", str(so_path)], text=True)
+    # Match PT_LOAD blocks and verify Alignment >= 16384
+    blocks = out.split("ProgramHeader {")
+    load_alignments = []
+    for blk in blocks[1:]:
+        if "Type: PT_LOAD" in blk:
+            m = re.search(r"Alignment:\s*(\d+)", blk)
+            if m:
+                load_alignments.append(int(m.group(1)))
+    if not load_alignments or any(a < 16384 for a in load_alignments):
+        raise RuntimeError(
+            f"16 KB ELF alignment check FAILED for {so_path}: PT_LOAD alignments={load_alignments}"
+        )
+    print(f"Verified 16 KB ELF PT_LOAD alignment for {so_path.name}: {load_alignments}")
 
 
 def configure_android_cmake(ndk_path: Path, abi: str) -> Path:
-    """Configure CMake for Android cross-compilation."""
-    build_dir = LATTICE_CPP_DIR / f"cmake-build-android-{abi}"
+    build_dir = BUILD_ROOT / f"cmake-build-android-{abi}"
     build_dir.mkdir(parents=True, exist_ok=True)
-
     toolchain = ndk_path / "build" / "cmake" / "android.toolchain.cmake"
-
+    linker_flags = "-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 -Wl,--gc-sections"
     cmake_args = [
         "cmake",
         str(LATTICE_CPP_DIR),
@@ -161,108 +215,86 @@ def configure_android_cmake(ndk_path: Path, abi: str) -> Path:
         f"-DANDROID_ABI={abi}",
         "-DANDROID_PLATFORM=android-26",
         "-DANDROID_STL=c++_static",
+        "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON",
+        f"-DCMAKE_SHARED_LINKER_FLAGS={linker_flags}",
     ]
-
     run_command(cmake_args, cwd=build_dir)
     return build_dir
 
 
 def build_android_cmake(build_dir: Path) -> None:
-    """Build the Android library (LatticeCAPI target only, skip tests)."""
     build_args = [
         "cmake",
         "--build", str(build_dir),
         "--config", "Release",
         "--target", "LatticeCAPI",
-        "--parallel",
+        "--parallel", "4",
     ]
     run_command(build_args)
 
 
-def copy_android_library(build_dir: Path, abi: str) -> None:
-    """Copy the built Android library to jniLibs."""
+def copy_android_library(ndk_path: Path, build_dir: Path, abi: str) -> None:
     lib_name = "libLatticeCAPI.so"
     src = build_dir / lib_name
-
     if not src.exists():
         raise RuntimeError(f"Built library not found at {src}")
 
     dst_dir = ANDROID_JNI_LIBS_DIR / abi
     dst_dir.mkdir(parents=True, exist_ok=True)
-
     dst = dst_dir / lib_name
-    print(f"Copying {src} -> {dst}")
     shutil.copy2(src, dst)
+
+    strip_tool = find_ndk_tool(ndk_path, "llvm-strip")
+    if strip_tool is not None:
+        run_command([str(strip_tool), "--strip-unneeded", str(dst)])
+
+    verify_16kb_alignment(ndk_path, dst)
+    size_mb = dst.stat().st_size / (1024 * 1024)
+    print(f"Installed stripped 16KB-aligned {dst} ({size_mb:.2f} MiB)")
 
 
 def build_android(abis: list[str] | None = None) -> None:
-    """Build the library for Android architectures."""
     ndk_path = find_android_ndk()
     if ndk_path is None:
-        raise RuntimeError(
-            "Android NDK not found. Set ANDROID_NDK_HOME or install via Android Studio."
-        )
-
+        raise RuntimeError("Android NDK not found. Set ANDROID_NDK_HOME.")
     print(f"Using Android NDK: {ndk_path}")
-
-    if abis is None:
-        abis = list(ANDROID_ABIS.keys())
-
-    for abi in abis:
-        print(f"\n{'=' * 60}")
-        print(f"Building for Android {abi}")
-        print('=' * 60)
-
+    for abi in (abis or list(ANDROID_ABIS.keys())):
+        print(f"\n{'=' * 60}\nBuilding for Android {abi}\n{'=' * 60}")
         build_dir = configure_android_cmake(ndk_path, abi)
         build_android_cmake(build_dir)
-        copy_android_library(build_dir, abi)
+        copy_android_library(ndk_path, build_dir, abi)
 
-    print(f"\nAndroid libraries installed to: {ANDROID_JNI_LIBS_DIR}")
+
+def clean() -> None:
+    if LIBS_DIR.exists():
+        shutil.rmtree(LIBS_DIR)
 
 
 def main() -> None:
-    """Main entry point."""
     import argparse
-
     parser = argparse.ArgumentParser(description="Build LatticeKotlin native dependencies")
-    parser.add_argument("--clean", action="store_true", help="Clean build artifacts")
-    parser.add_argument("--skip-build", action="store_true", help="Skip building, just copy existing library")
-    parser.add_argument("--reconfigure", action="store_true", help="Force CMake reconfiguration")
-    parser.add_argument("--android", action="store_true", help="Build for Android (cross-compile)")
-    parser.add_argument("--abi", type=str, help="Specific Android ABI to build (e.g., arm64-v8a)")
+    parser.add_argument("--clean", action="store_true")
+    parser.add_argument("--skip-build", action="store_true")
+    parser.add_argument("--from-build-dir", type=str, help="Copy host library from existing CMake build dir")
+    parser.add_argument("--reconfigure", action="store_true")
+    parser.add_argument("--android", action="store_true")
+    parser.add_argument("--abi", type=str)
     args = parser.parse_args()
 
     if args.clean:
         clean()
         return
-
     if args.android:
-        abis = [args.abi] if args.abi else None
-        build_android(abis)
-        print("\n" + "=" * 60)
-        print("Android build complete!")
-        print(f"Libraries installed to: {ANDROID_JNI_LIBS_DIR}")
-        print("=" * 60)
+        build_android([args.abi] if args.abi else None)
         return
-
+    if args.from_build_dir:
+        copy_library(Path(args.from_build_dir).resolve())
+        return
     if not args.skip_build:
-        # Configure if needed
-        cmake_cache = CMAKE_BUILD_DIR / "CMakeCache.txt"
-        if args.reconfigure or not cmake_cache.exists():
+        if not (CMAKE_BUILD_DIR / "CMakeCache.txt").exists() or args.reconfigure:
             configure_cmake()
-
         build_cmake()
-
     copy_library()
-
-    print("\n" + "=" * 60)
-    print("Build complete!")
-    print(f"Library installed to: {LIBS_DIR / get_lib_name()}")
-    print("\nTo build the Kotlin project:")
-    print("  ./gradlew build")
-    print("\nTo build for Android:")
-    print("  python build.py --android")
-    print("=" * 60)
 
 
 if __name__ == "__main__":

@@ -1,17 +1,15 @@
 import com.vanniktech.maven.publish.SonatypeHost
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
 
 plugins {
     kotlin("multiplatform")
-    kotlin("plugin.serialization") version "2.0.21"
+    kotlin("plugin.serialization") version "2.4.10"
     id("com.android.library")
     id("com.vanniktech.maven.publish")
 }
 
-// LatticeCore is a git submodule pinned to a release tag.
-// The native library is either pre-built in libs/ or built from source via CMake.
 val latticeCoreSrc = rootProject.file("LatticeCore")
-val latticeCoreHeader = latticeCoreSrc.resolve("Sources/LatticeCAPI/include/lattice.h")
 val libsDir = project.file("libs")
 val compilerPluginProject = project(":lattice-compiler-plugin")
 
@@ -19,10 +17,8 @@ kotlin {
     // Android target (JVM-based, produces AAR)
     androidTarget {
         publishLibraryVariants("release")
-        compilations.all {
-            kotlinOptions {
-                jvmTarget = "17"
-            }
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_17)
         }
     }
 
@@ -30,55 +26,40 @@ kotlin {
     macosArm64()
     macosX64()
     linuxX64()
-    // iosArm64()
-    // iosSimulatorArm64()
-
-    // Note: Android Native targets (androidNativeArm64, etc.) are NOT included
-    // because Ktor doesn't support them. Android apps use the JVM-based
-    // androidTarget with JNI instead.
 
     sourceSets {
         commonMain {
             dependencies {
-                // JSON serialization for embedded models
                 implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
-                // Coroutines for scheduler support
-                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
-                // Date/time support
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
                 implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.6.1")
-                // UUID: using kotlin.uuid.Uuid from stdlib (Kotlin 2.0+)
-                // Ktor for WebSocket support (multiplatform)
-                implementation("io.ktor:ktor-client-core:2.3.7")
-                implementation("io.ktor:ktor-client-websockets:2.3.7")
+                implementation("io.ktor:ktor-client-core:3.0.0")
+                implementation("io.ktor:ktor-client-websockets:3.0.0")
             }
         }
         commonTest {
             dependencies {
                 implementation(kotlin("test"))
-                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
             }
         }
 
-        // Native source set for desktop native targets
         val nativeMain by creating {
             dependsOn(commonMain.get())
             dependencies {
-                // Ktor CIO engine for native platforms (macOS, Linux)
-                implementation("io.ktor:ktor-client-cio:2.3.7")
+                implementation("io.ktor:ktor-client-cio:3.0.0")
             }
         }
 
         val nativeTest by creating {
             dependsOn(commonTest.get())
             dependencies {
-                // Ktor Server CIO for in-process sync relay (mirrors Swift's Vapor test server)
-                implementation("io.ktor:ktor-server-core:2.3.7")
-                implementation("io.ktor:ktor-server-cio:2.3.7")
-                implementation("io.ktor:ktor-server-websockets:2.3.7")
+                implementation("io.ktor:ktor-server-core:3.0.0")
+                implementation("io.ktor:ktor-server-cio:3.0.0")
+                implementation("io.ktor:ktor-server-websockets:3.0.0")
             }
         }
 
-        // All native targets depend on nativeMain/nativeTest
         val macosArm64Main by getting { dependsOn(nativeMain) }
         val macosX64Main by getting { dependsOn(nativeMain) }
         val linuxX64Main by getting { dependsOn(nativeMain) }
@@ -86,13 +67,28 @@ kotlin {
         val macosX64Test by getting { dependsOn(nativeTest) }
         val linuxX64Test by getting { dependsOn(nativeTest) }
 
-        // Android JVM target has its own implementation (JNI)
-        // Does NOT depend on nativeMain (cinterop not available on JVM)
         val androidMain by getting {
             dependsOn(commonMain.get())
             dependencies {
-                // Ktor OkHttp engine for Android
-                implementation("io.ktor:ktor-client-okhttp:2.3.7")
+                implementation("io.ktor:ktor-client-okhttp:3.0.0")
+            }
+        }
+
+        val androidUnitTest by getting {
+            dependencies {
+                implementation(kotlin("test"))
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+                implementation("org.ow2.asm:asm-util:9.7")
+            }
+        }
+
+        val androidInstrumentedTest by getting {
+            dependencies {
+                implementation("junit:junit:4.13.2")
+                implementation("androidx.test:runner:1.6.2")
+                implementation("androidx.test:core:1.6.1")
+                implementation("androidx.test.ext:junit:1.2.1")
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
             }
         }
     }
@@ -103,28 +99,22 @@ kotlin {
         compilations.getByName("main") {
             cinterops {
                 create("lattice") {
-                    defFile = file("src/nativeInterop/cinterop/lattice.def")
-
-                    // Set include and library paths
+                    definitionFile.set(file("src/nativeInterop/cinterop/lattice.def"))
                     includeDirs(libsDir)
-
                     extraOpts("-libraryPath", libsDir.absolutePath)
                 }
             }
         }
 
-        // Configure all binaries (including test binaries)
         binaries.all {
             linkerOpts("-L${libsDir.absolutePath}", "-lLatticeCAPI")
 
-            // Set rpath for runtime library loading
             when {
                 target.konanTarget.family.isAppleFamily -> {
                     linkerOpts("-Wl,-rpath,@executable_path")
                     linkerOpts("-Wl,-rpath,${libsDir.absolutePath}")
                 }
                 else -> {
-                    // Linux and other Unix-like systems
                     linkerOpts("-Wl,-rpath,\$ORIGIN")
                     linkerOpts("-Wl,-rpath,${libsDir.absolutePath}")
                 }
@@ -133,22 +123,29 @@ kotlin {
     }
 }
 
-// Android library configuration
 android {
     namespace = "com.lattice"
-    compileSdk = 34
+    compileSdk = 36
+    ndkVersion = "27.2.12479018"
+    val sdkRoot = System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT")
+    val localR27c = sdkRoot?.let { File(it, "ndk/android-ndk-r27c") }
+    if (localR27c != null && localR27c.isDirectory) {
+        ndkPath = localR27c.absolutePath
+    }
 
     defaultConfig {
         minSdk = 26
 
-        // Configure NDK build
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        consumerProguardFiles("consumer-rules.pro")
+
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
 
         externalNativeBuild {
             cmake {
-                cppFlags += ""
+                arguments += "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
             }
         }
     }
@@ -158,7 +155,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    // Configure CMake for JNI build
     externalNativeBuild {
         cmake {
             path = file("src/androidMain/jni/CMakeLists.txt")
@@ -166,7 +162,6 @@ android {
         }
     }
 
-    // Location of prebuilt native libraries
     sourceSets {
         getByName("main") {
             jniLibs.srcDirs("src/androidMain/jniLibs")
@@ -174,7 +169,6 @@ android {
     }
 }
 
-// Task to verify native library exists
 tasks.register("checkNativeLib") {
     doLast {
         val libName = when {
@@ -188,7 +182,7 @@ tasks.register("checkNativeLib") {
                 """
                 Native library not found at: $libFile
 
-                Run 'python build.py' to build and copy the LatticeCAPI library.
+                Run 'python3 build.py' to build and copy the LatticeCAPI library.
                 """.trimIndent()
             )
         }
@@ -196,15 +190,10 @@ tasks.register("checkNativeLib") {
     }
 }
 
-// Make cinterop depend on library check
 tasks.matching { it.name.contains("cinterop", ignoreCase = true) }.configureEach {
     dependsOn("checkNativeLib")
 }
 
-// Cross-target test binaries can only link when the native library for that
-// target is present in libs/ (build.py builds the host library only). Skip
-// the link+run of test binaries whose target library is missing so
-// `./gradlew build` works on any single-platform host.
 afterEvaluate {
     val hostIsMac = org.gradle.internal.os.OperatingSystem.current().isMacOsX
     val hostIsLinux = org.gradle.internal.os.OperatingSystem.current().isLinux
@@ -223,9 +212,15 @@ afterEvaluate {
     }
 }
 
+val hasSigningKey = providers.gradleProperty("signingInMemoryKey").isPresent ||
+    providers.environmentVariable("ORG_GRADLE_PROJECT_signingInMemoryKey").isPresent ||
+    providers.gradleProperty("signing.keyId").isPresent
+
 mavenPublishing {
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
-    signAllPublications()
+    if (hasSigningKey) {
+        signAllPublications()
+    }
     coordinates("io.github.jsflax", "lattice-runtime", version.toString())
     pom {
         name.set("Lattice Runtime")
@@ -252,13 +247,34 @@ mavenPublishing {
     }
 }
 
-// Apply compiler plugin to test compilations
+tasks.withType<Test>().configureEach {
+    systemProperty("lattice.module.dir", projectDir.absolutePath)
+    systemProperty("lattice.host.native.dir", libsDir.absolutePath)
+    System.getProperty("lattice.golden.update")?.let { systemProperty("lattice.golden.update", it) }
+}
+
+tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest>().configureEach {
+    providers.environmentVariable("LATTICE_CONFORMANCE_DIR").orNull?.let {
+        environment("LATTICE_CONFORMANCE_DIR", it)
+    }
+}
+
 tasks.withType<KotlinCompilationTask<*>>().matching {
     it.name.contains("Test", ignoreCase = true)
 }.configureEach {
     dependsOn(":lattice-compiler-plugin:jar")
+    val pluginJar = compilerPluginProject.layout.buildDirectory
+        .file("libs/lattice-compiler-plugin-${project.version}.jar")
     compilerOptions {
-        val pluginJar = compilerPluginProject.layout.buildDirectory.file("libs/lattice-compiler-plugin-1.0.0.jar")
         freeCompilerArgs.add("-Xplugin=${pluginJar.get().asFile.absolutePath}")
+    }
+
+    inputs.file(pluginJar)
+        .withPropertyName("latticeCompilerPluginJar")
+        .withPathSensitivity(PathSensitivity.NONE)
+
+    doFirst {
+        val jar = pluginJar.get().asFile
+        check(jar.exists()) { "Lattice compiler plugin jar missing: $jar — the @Model transform would silently no-op." }
     }
 }

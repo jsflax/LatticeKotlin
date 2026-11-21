@@ -2,7 +2,9 @@ package com.lattice.conformance
 
 import com.lattice.FloatVector
 import com.lattice.FullText
+import com.lattice.GeoBounds
 import com.lattice.Lattice
+import com.lattice.LatticeHydrationMarker
 import com.lattice.LatticeList
 import com.lattice.LatticeObject
 import com.lattice.Link
@@ -94,6 +96,19 @@ class CfBlobDoc {
     var payload: ByteArray = ByteArray(0)
 }
 
+@Model
+class CfCounter {
+    var label: String = ""
+    var hits: Long = 0
+}
+
+@Model
+class CfPlace {
+    var name: String = ""
+    var kind: String = ""
+    var location: GeoBounds = GeoBounds(0.0, 0.0, 0.0, 0.0)
+}
+
 // =============================================================================
 // Property accessors: generic (by-name) access routed through the PUBLIC
 // compiled property surface — never through NativeBridge.
@@ -114,6 +129,7 @@ class TableSpec(
     val props: Map<String, PropSpec>,
     val kclass: KClass<out LatticeObject>,
     val factory: () -> LatticeObject,
+    val hydrationFactory: ((Long) -> LatticeObject)? = null,
     val getters: Map<String, (LatticeObject) -> Any?>,
     val setters: Map<String, (LatticeObject, Any?) -> Unit>,
     val lists: Map<String, ListAccessor> = emptyMap(),
@@ -343,6 +359,47 @@ internal object Catalog {
                 "stars" to { o, v -> (o as com.lattice.conformance.v2.CfBlobDoc).stars = v as Long },
             ),
         ))
+
+        put(1, TableSpec(
+            name = "CfCounter",
+            props = mapOf(
+                "label" to PropSpec("string"),
+                "hits" to PropSpec("int"),
+            ),
+            kclass = CfCounter::class,
+            factory = { CfCounter() },
+            hydrationFactory = { h -> CfCounter(h, LatticeHydrationMarker) },
+            getters = mapOf(
+                "label" to { o -> (o as CfCounter).label },
+                "hits" to { o -> (o as CfCounter).hits },
+            ),
+            setters = mapOf(
+                "label" to { o, v -> (o as CfCounter).label = v as String },
+                "hits" to { o, v -> (o as CfCounter).hits = v as Long },
+            ),
+        ))
+
+        put(1, TableSpec(
+            name = "CfPlace",
+            props = mapOf(
+                "name" to PropSpec("string"),
+                "kind" to PropSpec("string"),
+                "location" to PropSpec("geo"),
+            ),
+            kclass = CfPlace::class,
+            factory = { CfPlace() },
+            hydrationFactory = { h -> CfPlace(h, LatticeHydrationMarker) },
+            getters = mapOf(
+                "name" to { o -> (o as CfPlace).name },
+                "kind" to { o -> (o as CfPlace).kind },
+                "location" to { o -> (o as CfPlace).location },
+            ),
+            setters = mapOf(
+                "name" to { o, v -> (o as CfPlace).name = v as String },
+                "kind" to { o, v -> (o as CfPlace).kind = v as String },
+                "location" to { o, v -> (o as CfPlace).location = v as GeoBounds },
+            ),
+        ))
     }
 
     /** Register every catalog factory (native has no reflection fallback). Idempotent. */
@@ -350,6 +407,10 @@ internal object Catalog {
         for (spec in tables.values) {
             @Suppress("UNCHECKED_CAST")
             Lattice.registerFactory(spec.kclass as KClass<LatticeObject>, spec.factory)
+            spec.hydrationFactory?.let { hf ->
+                @Suppress("UNCHECKED_CAST")
+                Lattice.registerHydrationFactory(spec.kclass as KClass<LatticeObject>, hf)
+            }
         }
     }
 }

@@ -1,0 +1,106 @@
+name: Publish Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "[0-9]+.[0-9]+.[0-9]*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: macos-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HAS_MAVEN_CENTRAL_SECRETS: ${{ secrets.MAVEN_CENTRAL_USERNAME != '' && secrets.MAVEN_CENTRAL_PASSWORD != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Fetch conformance corpus
+        run: git -C LatticeCore fetch origin conformance-corpus:refs/remotes/origin/conformance-corpus
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Android SDK Platform 36 & NDK 27.2.12479018
+        run: |
+          SDKM="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKM" ]; then SDKM="$(command -v sdkmanager)"; fi
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "platforms;android-36" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Build Host & Android NDK Libraries (16 KB ELF Verified)
+        env:
+          CC: clang
+          CXX: clang++
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
+        run: |
+          python3 build.py
+          python3 build.py --android
+
+      - name: Run Verification Suite & Assemble Release Artifacts
+        run: |
+          ./gradlew :lattice-compiler-plugin:jar :lattice-gradle-plugin:jar \
+            :lattice-runtime:assembleRelease :lattice-runtime:macosArm64Klib \
+            :lattice-runtime:testDebugUnitTest :lattice-runtime:macosArm64Test --stacktrace
+
+      - name: Verify 16 KB ELF PT_LOAD Alignment in Release AAR
+        shell: python
+        run: |
+          import struct, zipfile
+          from pathlib import Path
+          aars = list(Path("lattice-runtime/build/outputs/aar").glob("*-release.aar"))
+          assert aars, "Missing release AAR"
+          with zipfile.ZipFile(aars[0]) as zf:
+              sos = [n for n in zf.namelist() if n.endswith(".so")]
+              assert len(sos) >= 4, f"Expected >= 4 .so files in AAR, found {sos}"
+              for name in sos:
+                  data = zf.read(name)
+                  e_phoff = struct.unpack_from("<Q", data, 0x20)[0]
+                  e_phentsize, e_phnum = struct.unpack_from("<HH", data, 0x36)
+                  for i in range(e_phnum):
+                      off = e_phoff + i * e_phentsize
+                      if struct.unpack_from("<I", data, off)[0] == 1:
+                          align = struct.unpack_from("<Q", data, off + 0x30)[0]
+                          assert align >= 16384 and (align & (align - 1)) == 0, f"{name}: PT_LOAD align={align} < 16384"
+          print(f"Verified 16 KB ELF PT_LOAD alignment across {len(sos)} AAR .so binaries.")
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#v}"
+          python3 - "$VER" /tmp/release-notes.md <<'PY'
+          import pathlib, re, sys
+          text = pathlib.Path("CHANGELOG.md").read_text()
+          m = re.search(r"^## \[?" + re.escape(sys.argv[1]) + r"\]?[^\n]*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+          notes = m.group(1).strip() if m else f"LatticeKotlin {sys.argv[1]}"
+          pathlib.Path(sys.argv[2]).write_text(notes + "\n")
+          PY
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              lattice-runtime/build/outputs/aar/lattice-runtime-release.aar \
+              lattice-compiler-plugin/build/libs/lattice-compiler-plugin-*.jar \
+              lattice-gradle-plugin/build/libs/lattice-gradle-plugin-*.jar \
+              --verify-tag --title "$TAG" --notes-file /tmp/release-notes.md --latest
+          fi
+
+      - name: Publish All Modules to Maven Central Portal
+        if: env.HAS_MAVEN_CENTRAL_SECRETS == 'true'
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyId: ${{ secrets.SIGNING_KEY_ID }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}
+        run: ./gradlew publishAllPublicationsToMavenCentralRepository --no-configuration-cache --stacktrace

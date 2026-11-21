@@ -1,0 +1,60 @@
+# codegen shape: com.lattice.codegen.GoldenLinkTarget
+
+getGlobalId()Ljava/lang/String;
+  LOAD 0
+  INVOKE com/lattice/LatticeObject.getGlobalId()Ljava/lang/String;
+
+getId()J
+  LOAD 0
+  INVOKE com/lattice/LatticeObject.getId()J
+
+getName()Ljava/lang/String;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenLinkTarget._lattice_handle_field_GoldenLinkTarget:J
+  CONST "name"
+  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+
+getNumber()I
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenLinkTarget._lattice_handle_field_GoldenLinkTarget:J
+  CONST "number"
+  INVOKE com/lattice/LatticeNative.getInt(JLjava/lang/String;)I
+
+get_latticeHandle()J
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenLinkTarget._lattice_handle_field_GoldenLinkTarget:J
+
+get_latticeSchema()Ljava/util/List;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  CONST "name:2:0:0::0,number:0:0:0::0"
+  INVOKE com/lattice/LatticeNative.buildSchemaFromString(Ljava/lang/String;)Ljava/util/List;
+
+get_latticeTableName()Ljava/lang/String;
+  CONST "GoldenLinkTarget"
+
+setName(Ljava/lang/String;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenLinkTarget._lattice_handle_field_GoldenLinkTarget:J
+  CONST "name"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+setNumber(I)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenLinkTarget._lattice_handle_field_GoldenLinkTarget:J
+  CONST "number"
+  LOAD 1
+  INVOKE java/lang/Integer.valueOf(I)Ljava/lang/Integer;
+  INVOKE com/lattice/LatticeNative.setInt(JLjava/lang/String;Ljava/lang/Integer;)V
+
+set_latticeHandle(J)V
+  LOAD 0
+  LOAD 1
+  FIELD com/lattice/codegen/GoldenLinkTarget._lattice_handle_field_GoldenLinkTarget:J

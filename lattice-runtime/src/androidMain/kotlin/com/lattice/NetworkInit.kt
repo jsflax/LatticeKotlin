@@ -6,15 +6,17 @@ import java.util.concurrent.atomic.AtomicBoolean
 private const val TAG = "LatticeSync"
 private val networkFactoryRegistered = AtomicBoolean(false)
 
-/**
- * Registers the Ktor-based network factory with the C++ layer via JNI.
- * Called once on first Lattice init with sync configuration.
- */
+internal fun safeLogDebug(tag: String, msg: String) {
+    try { Log.d(tag, msg) } catch (_: Throwable) {}
+}
+
+internal fun safeLogError(tag: String, msg: String) {
+    try { Log.e(tag, msg) } catch (_: Throwable) {}
+}
+
 internal actual fun ensureNetworkFactoryRegistered() {
-    Log.d(TAG, "ensureNetworkFactoryRegistered called, already registered: ${networkFactoryRegistered.get()}")
     if (networkFactoryRegistered.compareAndSet(false, true)) {
-        Log.d(TAG, "Registering network factory...")
+        safeLogDebug(TAG, "Registering default Ktor network factory")
         LatticeNetworkBridge.initializeDefault()
-        Log.d(TAG, "Network factory registered")
     }
 }

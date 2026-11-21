@@ -9,3 +9,12 @@ actual fun createDefaultHttpClient(): HttpClient {
         install(WebSockets)
     }
 }
+
+internal actual fun createHttpClientWithPin(pinnedServerCertificateSha256: String?): HttpClient? {
+    if (pinnedServerCertificateSha256.isNullOrBlank()) {
+        return createDefaultHttpClient()
+    }
+    // Ktor CIO on Kotlin/Native does not expose raw leaf DER bytes for custom pinning;
+    // return null so LatticeCore fails closed rather than silently ignoring a pin.
+    return null
+}

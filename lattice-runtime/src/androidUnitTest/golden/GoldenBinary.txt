@@ -1,0 +1,77 @@
+# codegen shape: com.lattice.codegen.GoldenBinary
+
+getContent()[B
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenBinary._lattice_handle_field_GoldenBinary:J
+  CONST "content"
+  INVOKE com/lattice/LatticeNative.getBlob(JLjava/lang/String;)[B
+
+getGlobalId()Ljava/lang/String;
+  LOAD 0
+  INVOKE com/lattice/LatticeObject.getGlobalId()Ljava/lang/String;
+
+getId()J
+  LOAD 0
+  INVOKE com/lattice/LatticeObject.getId()J
+
+getName()Ljava/lang/String;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenBinary._lattice_handle_field_GoldenBinary:J
+  CONST "name"
+  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+
+getThumbnail()[B
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenBinary._lattice_handle_field_GoldenBinary:J
+  CONST "thumbnail"
+  INVOKE com/lattice/LatticeNative.getBlobOrNull(JLjava/lang/String;)[B
+
+get_latticeHandle()J
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenBinary._lattice_handle_field_GoldenBinary:J
+
+get_latticeSchema()Ljava/util/List;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  CONST "name:2:0:0::0,content:3:0:0::0,thumbnail:3:0:1::0"
+  INVOKE com/lattice/LatticeNative.buildSchemaFromString(Ljava/lang/String;)Ljava/util/List;
+
+get_latticeTableName()Ljava/lang/String;
+  CONST "GoldenBinary"
+
+setContent([B)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenBinary._lattice_handle_field_GoldenBinary:J
+  CONST "content"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setBlob(JLjava/lang/String;[B)V
+
+setName(Ljava/lang/String;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenBinary._lattice_handle_field_GoldenBinary:J
+  CONST "name"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+setThumbnail([B)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenBinary._lattice_handle_field_GoldenBinary:J
+  CONST "thumbnail"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setBlob(JLjava/lang/String;[B)V
+
+set_latticeHandle(J)V
+  LOAD 0
+  LOAD 1
+  FIELD com/lattice/codegen/GoldenBinary._lattice_handle_field_GoldenBinary:J

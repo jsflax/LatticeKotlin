@@ -1,0 +1,242 @@
+# codegen shape: com.lattice.codegen.GoldenUnionsAndNoHistory
+
+getBounds()Lcom/lattice/GeoBounds;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenUnionsAndNoHistory._lattice_handle_field_GoldenUnionsAndNoHistory:J
+  CONST "bounds"
+  INVOKE com/lattice/LatticeNative.getGeoBounds(JLjava/lang/String;)Lcom/lattice/GeoBounds;
+
+getGlobalId()Ljava/lang/String;
+  LOAD 0
+  INVOKE com/lattice/LatticeObject.getGlobalId()Ljava/lang/String;
+
+getId()J
+  LOAD 0
+  INVOKE com/lattice/LatticeObject.getId()J
+
+getMappedProp$annotations()V
+
+getMappedProp()Ljava/lang/String;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenUnionsAndNoHistory._lattice_handle_field_GoldenUnionsAndNoHistory:J
+  CONST "mappedProp"
+  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+
+getPriorities()Ljava/util/Set;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenUnionsAndNoHistory._lattice_handle_field_GoldenUnionsAndNoHistory:J
+  CONST "priorities"
+  INVOKE com/lattice/codegen/GoldenPriority.values()[Lcom/lattice/codegen/GoldenPriority;
+  TYPE [Ljava/lang/Enum;
+  INVOKE com/lattice/LatticeNative.getEnumSet(JLjava/lang/String;[Ljava/lang/Enum;)Ljava/util/Set;
+
+getSegments$annotations()V
+
+getSegments()Ljava/util/List;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenUnionsAndNoHistory._lattice_handle_field_GoldenUnionsAndNoHistory:J
+  CONST "segments"
+  CONST Lcom/lattice/codegen/GoldenAddress;
+  INVOKE kotlin/jvm/internal/Reflection.getOrCreateKotlinClass(Ljava/lang/Class;)Lkotlin/reflect/KClass;
+  INVOKE com/lattice/LatticeNative.getEmbeddedList(JLjava/lang/String;Lkotlin/reflect/KClass;)Ljava/util/List;
+
+getSignal()Lcom/lattice/codegen/GoldenSignal;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenUnionsAndNoHistory._lattice_handle_field_GoldenUnionsAndNoHistory:J
+  CONST "signal"
+  INVOKE com/lattice/LatticeNative.getUnionHandle(JLjava/lang/String;)J
+  LOAD 1
+  LOAD 1
+  CONST 0
+  FIELD com/lattice/codegen/GoldenSignal$None.INSTANCE:Lcom/lattice/codegen/GoldenSignal$None;
+  TYPE com/lattice/codegen/GoldenSignal
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.getUnionCase(J)Ljava/lang/String;
+  LOAD 3
+  LOAD 3
+  INVOKE java/lang/String.hashCode()I
+  LOAD 3
+  CONST "note"
+  INVOKE java/lang/String.equals(Ljava/lang/Object;)Z
+  LOAD 3
+  CONST "address"
+  INVOKE java/lang/String.equals(Ljava/lang/Object;)Z
+  LOAD 3
+  CONST "none"
+  INVOKE java/lang/String.equals(Ljava/lang/Object;)Z
+  TYPE com/lattice/codegen/GoldenSignal$AddressWrap
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 1
+  CONST "_0"
+  CONST Lcom/lattice/codegen/GoldenAddress;
+  INVOKE kotlin/jvm/internal/Reflection.getOrCreateKotlinClass(Ljava/lang/Class;)Lkotlin/reflect/KClass;
+  INVOKE com/lattice/LatticeNative.getUnionEmbedded(JLjava/lang/String;Lkotlin/reflect/KClass;)Ljava/lang/Object;
+  TYPE com/lattice/codegen/GoldenAddress
+  INVOKE com/lattice/codegen/GoldenSignal$AddressWrap.<init>(Lcom/lattice/codegen/GoldenAddress;)V
+  TYPE com/lattice/codegen/GoldenSignal
+  FIELD com/lattice/codegen/GoldenSignal$None.INSTANCE:Lcom/lattice/codegen/GoldenSignal$None;
+  TYPE com/lattice/codegen/GoldenSignal
+  TYPE com/lattice/codegen/GoldenSignal$Note
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 1
+  CONST "text"
+  INVOKE com/lattice/LatticeNative.getUnionString(JLjava/lang/String;)Ljava/lang/String;
+  INVOKE com/lattice/codegen/GoldenSignal$Note.<init>(Ljava/lang/String;)V
+  TYPE com/lattice/codegen/GoldenSignal
+  FIELD com/lattice/codegen/GoldenSignal$None.INSTANCE:Lcom/lattice/codegen/GoldenSignal$None;
+  TYPE com/lattice/codegen/GoldenSignal
+  LOAD 4
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.releaseUnionHandle(J)V
+  LOAD 4
+
+getStreamedText$annotations()V
+
+getStreamedText()Ljava/lang/String;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenUnionsAndNoHistory._lattice_handle_field_GoldenUnionsAndNoHistory:J
+  CONST "streamedText"
+  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+
+get_latticeHandle()J
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenUnionsAndNoHistory._lattice_handle_field_GoldenUnionsAndNoHistory:J
+
+get_latticeSchema()Ljava/util/List;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  CONST "streamedText:2:0:0::16,segments:2:0:0::16,priorities:2:0:0::0,mappedProp:2:0:0::0:custom_col::,bounds:1:0:0::32,signal:2:5:0::0:::_GoldenSignal|address~^2^0^;none;note~text^2^0^"
+  INVOKE com/lattice/LatticeNative.buildSchemaFromString(Ljava/lang/String;)Ljava/util/List;
+
+get_latticeTableName()Ljava/lang/String;
+  CONST "custom_golden_v312"
+
+setBounds(Lcom/lattice/GeoBounds;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenUnionsAndNoHistory._lattice_handle_field_GoldenUnionsAndNoHistory:J
+  CONST "bounds"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setGeoBounds(JLjava/lang/String;Lcom/lattice/GeoBounds;)V
+
+setMappedProp(Ljava/lang/String;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenUnionsAndNoHistory._lattice_handle_field_GoldenUnionsAndNoHistory:J
+  CONST "mappedProp"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+setPriorities(Ljava/util/Set;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenUnionsAndNoHistory._lattice_handle_field_GoldenUnionsAndNoHistory:J
+  CONST "priorities"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setEnumSet(JLjava/lang/String;Ljava/util/Set;)V
+
+setSegments(Ljava/util/List;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenUnionsAndNoHistory._lattice_handle_field_GoldenUnionsAndNoHistory:J
+  CONST "segments"
+  LOAD 1
+  CONST Lcom/lattice/codegen/GoldenAddress;
+  INVOKE kotlin/jvm/internal/Reflection.getOrCreateKotlinClass(Ljava/lang/Class;)Lkotlin/reflect/KClass;
+  INVOKE com/lattice/LatticeNative.setEmbeddedList(JLjava/lang/String;Ljava/util/List;Lkotlin/reflect/KClass;)V
+
+setSignal(Lcom/lattice/codegen/GoldenSignal;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  LOAD 1
+  TYPE com/lattice/codegen/GoldenSignal$AddressWrap
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  CONST "address"
+  INVOKE com/lattice/LatticeNative.createUnionHandle(Ljava/lang/String;)J
+  LOAD 2
+  LOAD 1
+  TYPE com/lattice/codegen/GoldenSignal$AddressWrap
+  LOAD 4
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 2
+  CONST "_0"
+  LOAD 4
+  INVOKE com/lattice/codegen/GoldenSignal$AddressWrap.getValue()Lcom/lattice/codegen/GoldenAddress;
+  CONST Lcom/lattice/codegen/GoldenAddress;
+  INVOKE kotlin/jvm/internal/Reflection.getOrCreateKotlinClass(Ljava/lang/Class;)Lkotlin/reflect/KClass;
+  INVOKE com/lattice/LatticeNative.setUnionEmbedded(JLjava/lang/String;Ljava/lang/Object;Lkotlin/reflect/KClass;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenUnionsAndNoHistory._lattice_handle_field_GoldenUnionsAndNoHistory:J
+  CONST "signal"
+  LOAD 2
+  INVOKE com/lattice/LatticeNative.setAndReleaseUnion(JLjava/lang/String;J)V
+  LOAD 1
+  TYPE com/lattice/codegen/GoldenSignal$None
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  CONST "none"
+  INVOKE com/lattice/LatticeNative.createUnionHandle(Ljava/lang/String;)J
+  LOAD 2
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenUnionsAndNoHistory._lattice_handle_field_GoldenUnionsAndNoHistory:J
+  CONST "signal"
+  LOAD 2
+  INVOKE com/lattice/LatticeNative.setAndReleaseUnion(JLjava/lang/String;J)V
+  LOAD 1
+  TYPE com/lattice/codegen/GoldenSignal$Note
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  CONST "note"
+  INVOKE com/lattice/LatticeNative.createUnionHandle(Ljava/lang/String;)J
+  LOAD 2
+  LOAD 1
+  TYPE com/lattice/codegen/GoldenSignal$Note
+  LOAD 4
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 2
+  CONST "text"
+  LOAD 4
+  INVOKE com/lattice/codegen/GoldenSignal$Note.getText()Ljava/lang/String;
+  INVOKE com/lattice/LatticeNative.setUnionString(JLjava/lang/String;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenUnionsAndNoHistory._lattice_handle_field_GoldenUnionsAndNoHistory:J
+  CONST "signal"
+  LOAD 2
+  INVOKE com/lattice/LatticeNative.setAndReleaseUnion(JLjava/lang/String;J)V
+
+setStreamedText(Ljava/lang/String;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenUnionsAndNoHistory._lattice_handle_field_GoldenUnionsAndNoHistory:J
+  CONST "streamedText"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+set_latticeHandle(J)V
+  LOAD 0
+  LOAD 1
+  FIELD com/lattice/codegen/GoldenUnionsAndNoHistory._lattice_handle_field_GoldenUnionsAndNoHistory:J

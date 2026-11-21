@@ -5,19 +5,12 @@ import io.ktor.client.plugins.websocket.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.consumeEach
 
-/**
- * WebSocket message type.
- */
 enum class WebSocketMessageType {
     TEXT,
     BINARY
 }
 
-/**
- * WebSocket state.
- */
 enum class WebSocketState {
     CONNECTING,
     OPEN,
@@ -31,8 +24,15 @@ enum class WebSocketState {
 interface LatticeWebSocket {
     fun connect(url: String, headers: Map<String, String> = emptyMap())
     fun disconnect()
+    fun close() { disconnect() }
     fun state(): WebSocketState
     fun send(type: WebSocketMessageType, data: ByteArray)
+
+    /**
+     * Configure a lowercase 64-hex SHA-256 TLS leaf certificate pin before [connect].
+     * Return true if this transport enforces the pin (or when [sha256Hex] is empty).
+     */
+    fun configureCertificatePin(sha256Hex: String): Boolean = sha256Hex.isEmpty()
 
     var onOpen: (() -> Unit)?
     var onMessage: ((type: WebSocketMessageType, data: ByteArray) -> Unit)?
@@ -40,154 +40,251 @@ interface LatticeWebSocket {
     var onClose: ((code: Int, reason: String) -> Unit)?
 }
 
-/**
- * Factory for creating WebSocket instances.
- */
 interface LatticeWebSocketFactory {
     fun createWebSocket(): LatticeWebSocket
 }
 
 /**
- * Ktor-based WebSocket implementation.
+ * Ktor-based WebSocket implementation honoring LatticeCore 3.0.0+ receive-recovery
+ * redials (calling [connect] while already OPEN without prior [disconnect]) and
+ * per-connection SHA-256 leaf certificate pinning.
  */
 class KtorWebSocket(
-    private val client: HttpClient,
-    private val scope: CoroutineScope
+    private var client: HttpClient,
+    private val scope: CoroutineScope,
+    private val ownsClient: Boolean = false,
+    private val ownsScope: Boolean = false
 ) : LatticeWebSocket {
 
+    private val lock = ArenaLock()
     private var session: DefaultClientWebSocketSession? = null
     private var connectionJob: Job? = null
     private var _state: WebSocketState = WebSocketState.CLOSED
-
-    private val sendChannel = Channel<Frame>(Channel.BUFFERED)
+    private var generation: Long = 0L
+    private var activePinHex: String = ""
+    private var sendChannel = Channel<Frame>(Channel.BUFFERED)
 
     override var onOpen: (() -> Unit)? = null
     override var onMessage: ((type: WebSocketMessageType, data: ByteArray) -> Unit)? = null
     override var onError: ((error: String) -> Unit)? = null
     override var onClose: ((code: Int, reason: String) -> Unit)? = null
 
+    override fun configureCertificatePin(sha256Hex: String): Boolean {
+        val normalized = sha256Hex.trim().lowercase()
+        if (normalized == activePinHex) return true
+        val pinnedClient = createHttpClientWithPin(normalized.ifEmpty { null }) ?: return false
+        val oldClient = lock.withLock {
+            val prev = if (ownsClient) client else null
+            client = pinnedClient
+            activePinHex = normalized
+            prev
+        }
+        try {
+            oldClient?.close()
+        } catch (_: Exception) {}
+        return true
+    }
+
     override fun connect(url: String, headers: Map<String, String>) {
-        println("KtorWebSocket: connect called, url=$url")
-        if (_state == WebSocketState.CONNECTING || _state == WebSocketState.OPEN) {
-            println("KtorWebSocket: already connecting/open, returning")
-            return
+        // LatticeCore 3.0.0+ receive-recovery contract: connect() may be called while
+        // OPEN/CONNECTING without a prior disconnect(). Supersede the old generation
+        // atomically so its teardown never fires onClose/onError into the new dial.
+        val (myGen, activeClient, mySendChannel) = lock.withLock {
+            val myGenNext = ++generation
+            val oldSession = session
+            val oldJob = connectionJob
+            val oldChannel = sendChannel
+            session = null
+            connectionJob = null
+            oldChannel.close()
+            sendChannel = Channel(Channel.BUFFERED)
+            _state = WebSocketState.CONNECTING
+            if (oldSession != null) {
+                scope.launch {
+                    try {
+                        oldSession.close(CloseReason(CloseReason.Codes.NORMAL, "Redial"))
+                    } catch (_: Exception) {}
+                }
+            }
+            oldJob?.cancel()
+            Triple(myGenNext, client, sendChannel)
         }
 
-        _state = WebSocketState.CONNECTING
-        println("KtorWebSocket: state=CONNECTING, launching coroutine")
-
-        connectionJob = scope.launch {
+        val job = scope.launch {
             try {
-                println("KtorWebSocket: calling client.webSocket...")
-                client.webSocket(url, request = {
+                activeClient.webSocket(url, request = {
                     headers.forEach { (key, value) ->
                         this.headers.append(key, value)
                     }
                 }) {
-                    println("KtorWebSocket: webSocket block entered, connection open")
-                    session = this
-                    _state = WebSocketState.OPEN
-                    println("KtorWebSocket: invoking onOpen callback")
+                    val stillCurrent = lock.withLock {
+                        if (generation == myGen) {
+                            session = this
+                            _state = WebSocketState.OPEN
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    if (!stillCurrent) {
+                        try { close(CloseReason(CloseReason.Codes.NORMAL, "Superseded")) } catch (_: Exception) {}
+                        return@webSocket
+                    }
+
                     onOpen?.invoke()
 
-                    // Launch sender coroutine
                     val senderJob = launch {
-                        sendChannel.consumeEach { frame ->
+                        for (frame in mySendChannel) {
                             try {
-                                println("KtorWebSocket: sending frame: $frame")
                                 send(frame)
+                            } catch (e: CancellationException) {
+                                throw e
                             } catch (e: Exception) {
-                                println("KtorWebSocket: send error: ${e.message}")
-                                onError?.invoke("Send failed: ${e.message}")
+                                val report = lock.withLock { generation == myGen }
+                                if (report) onError?.invoke("Send failed: ${e.message}")
                             }
                         }
                     }
 
-                    // Receive messages
-                    println("KtorWebSocket: starting receive loop")
+                    var sawCloseFrame = false
                     try {
                         for (frame in incoming) {
-                            println("KtorWebSocket: received frame: ${frame::class.simpleName}")
+                            if (lock.withLock { generation != myGen }) break
                             when (frame) {
                                 is Frame.Text -> {
-                                    val bytes = frame.readBytes()
-                                    val text = bytes.decodeToString()
-                                    println("KtorWebSocket: TEXT frame, size=${bytes.size}, content=$text")
-                                    onMessage?.invoke(WebSocketMessageType.TEXT, bytes)
+                                    onMessage?.invoke(WebSocketMessageType.TEXT, frame.readBytes())
                                 }
                                 is Frame.Binary -> {
-                                    val bytes = frame.readBytes()
-                                    println("KtorWebSocket: BINARY frame, size=${bytes.size}")
-                                    onMessage?.invoke(WebSocketMessageType.BINARY, bytes)
+                                    onMessage?.invoke(WebSocketMessageType.BINARY, frame.readBytes())
                                 }
                                 is Frame.Close -> {
-                                    println("KtorWebSocket: CLOSE frame received")
+                                    sawCloseFrame = true
                                     val reason = closeReason.await()
+                                    val fireClose = lock.withLock {
+                                        if (generation == myGen) {
+                                            _state = WebSocketState.CLOSED
+                                            session = null
+                                            true
+                                        } else false
+                                    }
+                                    if (fireClose) {
+                                        onClose?.invoke(reason?.code?.toInt() ?: 1000, reason?.message ?: "")
+                                    }
+                                }
+                                else -> {}
+                            }
+                        }
+                        if (!sawCloseFrame) {
+                            val fireEofClose = lock.withLock {
+                                if (generation == myGen && _state != WebSocketState.CLOSED) {
                                     _state = WebSocketState.CLOSED
-                                    onClose?.invoke(reason?.code?.toInt() ?: 1000, reason?.message ?: "")
-                                }
-                                else -> {
-                                    println("KtorWebSocket: other frame type: ${frame::class.simpleName}")
-                                }
+                                    session = null
+                                    true
+                                } else false
+                            }
+                            if (fireEofClose) {
+                                onClose?.invoke(1006, "Connection closed")
                             }
                         }
                     } finally {
-                        println("KtorWebSocket: receive loop ended")
                         senderJob.cancel()
                     }
                 }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                // Normal shutdown — coroutine was cancelled during disconnect
-                _state = WebSocketState.CLOSED
+            } catch (_: CancellationException) {
+                lock.withLock {
+                    if (generation == myGen) {
+                        _state = WebSocketState.CLOSED
+                        session = null
+                    }
+                }
             } catch (e: Exception) {
-                println("KtorWebSocket: connection error: ${e.message}")
-                _state = WebSocketState.CLOSED
-                onError?.invoke(e.message ?: "Connection failed")
+                val fireError = lock.withLock {
+                    if (generation == myGen) {
+                        _state = WebSocketState.CLOSED
+                        session = null
+                        true
+                    } else false
+                }
+                if (fireError) {
+                    onError?.invoke(e.message ?: "Connection failed")
+                }
+            }
+        }
+
+        lock.withLock {
+            if (generation == myGen) {
+                connectionJob = job
+            } else {
+                job.cancel()
             }
         }
     }
 
     override fun disconnect() {
-        _state = WebSocketState.CLOSING
-        try {
-            session?.let { s ->
-                scope.launch {
-                    try {
-                        s.close(CloseReason(CloseReason.Codes.NORMAL, "Client disconnect"))
-                    } catch (_: Exception) {}
-                }
+        val (oldSession, oldJob, oldChannel) = lock.withLock {
+            generation++
+            _state = WebSocketState.CLOSED
+            val s = session
+            val j = connectionJob
+            val ch = sendChannel
+            session = null
+            connectionJob = null
+            sendChannel = Channel(Channel.BUFFERED)
+            Triple(s, j, ch)
+        }
+        oldChannel.close()
+        if (oldSession != null) {
+            scope.launch {
+                try {
+                    oldSession.close(CloseReason(CloseReason.Codes.NORMAL, "Client disconnect"))
+                } catch (_: Exception) {}
             }
-            connectionJob?.cancel()
-        } catch (_: Exception) {}
-        session = null
-        _state = WebSocketState.CLOSED
+        }
+        oldJob?.cancel()
     }
 
-    override fun state(): WebSocketState = _state
+    override fun close() {
+        disconnect()
+        val clientToClose = lock.withLock {
+            if (ownsClient) client else null
+        }
+        try {
+            clientToClose?.close()
+        } catch (_: Exception) {}
+        if (ownsScope) {
+            scope.cancel()
+        }
+    }
+
+    override fun state(): WebSocketState = lock.withLock { _state }
 
     override fun send(type: WebSocketMessageType, data: ByteArray) {
         val frame = when (type) {
             WebSocketMessageType.TEXT -> Frame.Text(data.decodeToString())
             WebSocketMessageType.BINARY -> Frame.Binary(true, data)
         }
+        val ch = lock.withLock { sendChannel }
         scope.launch {
-            sendChannel.send(frame)
+            try {
+                ch.send(frame)
+            } catch (_: Exception) {}
         }
     }
 }
 
-/**
- * Default factory using Ktor.
- */
 expect fun createDefaultHttpClient(): HttpClient
 
-class KtorWebSocketFactory : LatticeWebSocketFactory {
+/**
+ * Creates a platform HttpClient enforcing [pinnedServerCertificateSha256] (lowercase 64-hex
+ * SHA-256 of the server leaf certificate DER) when non-null, or returns null if the current
+ * platform engine cannot enforce leaf certificate pinning.
+ */
+internal expect fun createHttpClientWithPin(pinnedServerCertificateSha256: String?): HttpClient?
 
+class KtorWebSocketFactory : LatticeWebSocketFactory {
     override fun createWebSocket(): LatticeWebSocket {
-        // Each WebSocket gets its own client + scope for full isolation.
-        // This prevents one connection's state from affecting others.
         val client = createDefaultHttpClient()
-        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-        return KtorWebSocket(client, scope)
+        val scope = CoroutineScope(defaultQueryDispatcher + SupervisorJob())
+        return KtorWebSocket(client, scope, ownsClient = true, ownsScope = true)
     }
 }

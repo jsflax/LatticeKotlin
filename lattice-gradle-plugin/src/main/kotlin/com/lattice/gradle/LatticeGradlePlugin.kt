@@ -8,17 +8,23 @@ import org.jetbrains.kotlin.gradle.plugin.KotlinCompilerPluginSupportPlugin
 import org.jetbrains.kotlin.gradle.plugin.SubpluginArtifact
 import org.jetbrains.kotlin.gradle.plugin.SubpluginOption
 
-class LatticeGradlePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin {
+class LatticeGradlePlugin : KotlinCompilerPluginSupportPlugin {
 
-    override fun apply(project: Project) {
-        project.extensions.create("lattice", LatticeExtension::class.java)
+    override fun apply(target: Project) {
+        val ext = target.extensions.findByType(LatticeExtension::class.java)
+            ?: target.extensions.create("lattice", LatticeExtension::class.java)
 
-        // Add runtime dependency
-        project.afterEvaluate {
-            project.dependencies.add(
-                "implementation",
-                "io.github.jsflax:lattice-runtime:${LatticeVersion.VERSION}"
-            )
+        target.afterEvaluate {
+            if (!ext.addRuntimeDependency) return@afterEvaluate
+            val coord = "io.github.jsflax:lattice-runtime:${LatticeVersion.VERSION}"
+            when {
+                target.configurations.findByName("commonMainImplementation") != null -> {
+                    target.dependencies.add("commonMainImplementation", coord)
+                }
+                target.configurations.findByName("implementation") != null -> {
+                    target.dependencies.add("implementation", coord)
+                }
+            }
         }
     }
 
@@ -29,7 +35,7 @@ class LatticeGradlePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin {
     override fun getCompilerPluginId(): String = "com.lattice.compiler"
 
     override fun getPluginArtifact(): SubpluginArtifact = SubpluginArtifact(
-        groupId = "com.lattice",
+        groupId = "io.github.jsflax",
         artifactId = "lattice-compiler-plugin",
         version = LatticeVersion.VERSION
     )
@@ -38,10 +44,5 @@ class LatticeGradlePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin {
 }
 
 open class LatticeExtension {
-    // Future configuration options can go here
-    // e.g., schema validation mode, sync settings, etc.
-}
-
-object LatticeVersion {
-    const val VERSION = "1.0.0"
+    var addRuntimeDependency: Boolean = true
 }

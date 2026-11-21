@@ -16,11 +16,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
-      # The conformance corpus lives on the LatticeCore conformance-corpus
-      # branch; the runner (ConformanceCorpusTest, part of the native test
-      # suite that `./gradlew build` runs) reads it from the submodule's git
-      # object database without moving the release-tag pin.
       - name: Fetch conformance corpus
         run: git -C LatticeCore fetch origin conformance-corpus:refs/remotes/origin/conformance-corpus
 
@@ -31,17 +28,56 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Build LatticeCore native library
-        # clang explicitly: gcc rejects the bridge's in-class explicit member
-        # specializations (managed_object.hpp); same pin latticecore's capi.yml
-        # and latticepython's ci.yml use.
+      - name: Install Android SDK Platform 36, NDK 27.2.12479018 & libsqlite3-dev (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+          SDKM="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKM" ]; then SDKM="$(command -v sdkmanager)"; fi
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "platforms;android-36" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Build LatticeCore host native library (+ host JNI)
         env:
           CC: clang
           CXX: clang++
         run: python3 build.py
 
+      - name: Build Android NDK 16 KB ELF-aligned libLatticeCAPI.so (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
+        run: python3 build.py --android
+
       - name: Build and test
-        run: ./gradlew build --stacktrace
+        run: |
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            ./gradlew build :lattice-runtime:assembleRelease --stacktrace
+          else
+            ./gradlew :lattice-compiler-plugin:build :lattice-gradle-plugin:build :lattice-runtime:macosArm64Test --stacktrace
+          fi
+
+      - name: Verify 16 KB ELF PT_LOAD alignment in release AAR (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        shell: python
+        run: |
+          import struct, zipfile
+          from pathlib import Path
+          aars = list(Path("lattice-runtime/build/outputs/aar").glob("*-release.aar"))
+          assert aars, "Missing release AAR"
+          with zipfile.ZipFile(aars[0]) as zf:
+              sos = [n for n in zf.namelist() if n.endswith(".so")]
+              assert len(sos) >= 4, f"Expected >= 4 .so files in AAR, found {sos}"
+              for name in sos:
+                  data = zf.read(name)
+                  e_phoff = struct.unpack_from("<Q", data, 0x20)[0]
+                  e_phentsize, e_phnum = struct.unpack_from("<HH", data, 0x36)
+                  for i in range(e_phnum):
+                      off = e_phoff + i * e_phentsize
+                      if struct.unpack_from("<I", data, off)[0] == 1:
+                          align = struct.unpack_from("<Q", data, off + 0x30)[0]
+                          assert align >= 16384 and (align & (align - 1)) == 0, f"{name}: PT_LOAD align={align} < 16384"
+          print(f"Verified 16 KB ELF PT_LOAD alignment across {len(sos)} AAR .so binaries.")
 
       - name: Upload test reports
         if: failure()

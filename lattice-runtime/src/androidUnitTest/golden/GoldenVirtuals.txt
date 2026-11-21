@@ -1,0 +1,95 @@
+# codegen shape: com.lattice.codegen.GoldenVirtuals
+
+getGlobalId()Ljava/lang/String;
+  LOAD 0
+  INVOKE com/lattice/LatticeObject.getGlobalId()Ljava/lang/String;
+
+getId()J
+  LOAD 0
+  INVOKE com/lattice/LatticeObject.getId()J
+
+getName()Ljava/lang/String;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenVirtuals._lattice_handle_field_GoldenVirtuals:J
+  CONST "name"
+  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+
+getOptionalVector()Lcom/lattice/FloatVector;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenVirtuals._lattice_handle_field_GoldenVirtuals:J
+  CONST "optionalVector"
+  INVOKE com/lattice/LatticeNative.getFloatVectorOrNull(JLjava/lang/String;)Lcom/lattice/FloatVector;
+
+getResults()Lcom/lattice/VirtualList;
+  TYPE com/lattice/VirtualList
+  INVOKE com/lattice/VirtualList.<init>()V
+  LOAD 1
+  LOAD 1
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenVirtuals._lattice_handle_field_GoldenVirtuals:J
+  CONST "results"
+  INVOKE com/lattice/LatticeNative.getLinkListHandle(JLjava/lang/String;)J
+  INVOKE com/lattice/VirtualList.set_nativeHandle(J)V
+  LOAD 1
+
+getVector()Lcom/lattice/FloatVector;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenVirtuals._lattice_handle_field_GoldenVirtuals:J
+  CONST "vector"
+  INVOKE com/lattice/LatticeNative.getFloatVector(JLjava/lang/String;)Lcom/lattice/FloatVector;
+
+get_latticeHandle()J
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenVirtuals._lattice_handle_field_GoldenVirtuals:J
+
+get_latticeSchema()Ljava/util/List;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  CONST "name:2:0:0::0,results:0:3:0::0,vector:3:0:0::8,optionalVector:3:0:1::8"
+  INVOKE com/lattice/LatticeNative.buildSchemaFromString(Ljava/lang/String;)Ljava/util/List;
+
+get_latticeTableName()Ljava/lang/String;
+  CONST "GoldenVirtuals"
+
+setName(Ljava/lang/String;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenVirtuals._lattice_handle_field_GoldenVirtuals:J
+  CONST "name"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+setOptionalVector(Lcom/lattice/FloatVector;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenVirtuals._lattice_handle_field_GoldenVirtuals:J
+  CONST "optionalVector"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setFloatVector(JLjava/lang/String;Lcom/lattice/FloatVector;)V
+
+setResults(Lcom/lattice/VirtualList;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+
+setVector(Lcom/lattice/FloatVector;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenVirtuals._lattice_handle_field_GoldenVirtuals:J
+  CONST "vector"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setFloatVector(JLjava/lang/String;Lcom/lattice/FloatVector;)V
+
+set_latticeHandle(J)V
+  LOAD 0
+  LOAD 1
+  FIELD com/lattice/codegen/GoldenVirtuals._lattice_handle_field_GoldenVirtuals:J

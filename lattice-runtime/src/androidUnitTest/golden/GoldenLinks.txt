@@ -1,0 +1,105 @@
+# codegen shape: com.lattice.codegen.GoldenLinks
+
+getGlobalId()Ljava/lang/String;
+  LOAD 0
+  INVOKE com/lattice/LatticeObject.getGlobalId()Ljava/lang/String;
+
+getId()J
+  LOAD 0
+  INVOKE com/lattice/LatticeObject.getId()J
+
+getMany()Lcom/lattice/LatticeList;
+  TYPE com/lattice/LatticeList
+  INVOKE com/lattice/LatticeList.<init>()V
+  LOAD 1
+  LOAD 1
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenLinks._lattice_handle_field_GoldenLinks:J
+  CONST "many"
+  INVOKE com/lattice/LatticeNative.getLinkListHandle(JLjava/lang/String;)J
+  INVOKE com/lattice/LatticeList.set_nativeHandle(J)V
+  LOAD 1
+  CONST Lcom/lattice/codegen/GoldenLinkTarget;
+  INVOKE kotlin/jvm/internal/Reflection.getOrCreateKotlinClass(Ljava/lang/Class;)Lkotlin/reflect/KClass;
+  INVOKE com/lattice/LatticeList.setElementClass(Lkotlin/reflect/KClass;)V
+  LOAD 1
+
+getName()Ljava/lang/String;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenLinks._lattice_handle_field_GoldenLinks:J
+  CONST "name"
+  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+
+getOne$annotations()V
+
+getOne()Lcom/lattice/codegen/GoldenLinkTarget;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenLinks._lattice_handle_field_GoldenLinks:J
+  CONST "one"
+  INVOKE com/lattice/LatticeNative.getObjectHandle(JLjava/lang/String;)J
+  LOAD 1
+  LOAD 1
+  CONST 0
+  CONST null
+  TYPE com/lattice/codegen/GoldenLinkTarget
+  LOAD 1
+  FIELD com/lattice/LatticeHydrationMarker.INSTANCE:Lcom/lattice/LatticeHydrationMarker;
+  INVOKE com/lattice/codegen/GoldenLinkTarget.<init>(JLcom/lattice/LatticeHydrationMarker;)V
+  LOAD 3
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 3
+  TYPE com/lattice/LatticeObject
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setHandle(Lcom/lattice/LatticeObject;J)V
+  LOAD 3
+
+get_latticeHandle()J
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenLinks._lattice_handle_field_GoldenLinks:J
+
+get_latticeSchema()Ljava/util/List;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  CONST "name:2:0:0::0,one:0:1:1:GoldenLinkTarget:0,many:0:2:0:GoldenLinkTarget:0"
+  INVOKE com/lattice/LatticeNative.buildSchemaFromString(Ljava/lang/String;)Ljava/util/List;
+
+get_latticeTableName()Ljava/lang/String;
+  CONST "GoldenLinks"
+
+setMany(Lcom/lattice/LatticeList;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+
+setName(Ljava/lang/String;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenLinks._lattice_handle_field_GoldenLinks:J
+  CONST "name"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+setOne(Lcom/lattice/codegen/GoldenLinkTarget;)V
+  LOAD 1
+  CONST 0
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  TYPE com/lattice/LatticeObject
+  INVOKE com/lattice/LatticeNative.getHandle(Lcom/lattice/LatticeObject;)J
+  LOAD 2
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenLinks._lattice_handle_field_GoldenLinks:J
+  CONST "one"
+  LOAD 2
+  INVOKE java/lang/Long.valueOf(J)Ljava/lang/Long;
+  INVOKE com/lattice/LatticeNative.setObjectHandle(JLjava/lang/String;Ljava/lang/Long;)V
+
+set_latticeHandle(J)V
+  LOAD 0
+  LOAD 1
+  FIELD com/lattice/codegen/GoldenLinks._lattice_handle_field_GoldenLinks:J

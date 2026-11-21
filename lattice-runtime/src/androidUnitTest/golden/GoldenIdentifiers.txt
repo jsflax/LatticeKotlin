@@ -1,0 +1,77 @@
+# codegen shape: com.lattice.codegen.GoldenIdentifiers
+
+getAssetId()Lkotlin/uuid/Uuid;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenIdentifiers._lattice_handle_field_GoldenIdentifiers:J
+  CONST "assetId"
+  INVOKE com/lattice/LatticeNative.getUuid(JLjava/lang/String;)Lkotlin/uuid/Uuid;
+
+getGlobalId()Ljava/lang/String;
+  LOAD 0
+  INVOKE com/lattice/LatticeObject.getGlobalId()Ljava/lang/String;
+
+getId()J
+  LOAD 0
+  INVOKE com/lattice/LatticeObject.getId()J
+
+getName()Ljava/lang/String;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenIdentifiers._lattice_handle_field_GoldenIdentifiers:J
+  CONST "name"
+  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+
+getParentId()Lkotlin/uuid/Uuid;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenIdentifiers._lattice_handle_field_GoldenIdentifiers:J
+  CONST "parentId"
+  INVOKE com/lattice/LatticeNative.getUuidOrNull(JLjava/lang/String;)Lkotlin/uuid/Uuid;
+
+get_latticeHandle()J
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenIdentifiers._lattice_handle_field_GoldenIdentifiers:J
+
+get_latticeSchema()Ljava/util/List;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  CONST "name:2:0:0::0,assetId:2:0:0::0,parentId:2:0:1::0"
+  INVOKE com/lattice/LatticeNative.buildSchemaFromString(Ljava/lang/String;)Ljava/util/List;
+
+get_latticeTableName()Ljava/lang/String;
+  CONST "GoldenIdentifiers"
+
+setAssetId(Lkotlin/uuid/Uuid;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenIdentifiers._lattice_handle_field_GoldenIdentifiers:J
+  CONST "assetId"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setUuid(JLjava/lang/String;Lkotlin/uuid/Uuid;)V
+
+setName(Ljava/lang/String;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenIdentifiers._lattice_handle_field_GoldenIdentifiers:J
+  CONST "name"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+setParentId(Lkotlin/uuid/Uuid;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenIdentifiers._lattice_handle_field_GoldenIdentifiers:J
+  CONST "parentId"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setUuid(JLjava/lang/String;Lkotlin/uuid/Uuid;)V
+
+set_latticeHandle(J)V
+  LOAD 0
+  LOAD 1
+  FIELD com/lattice/codegen/GoldenIdentifiers._lattice_handle_field_GoldenIdentifiers:J

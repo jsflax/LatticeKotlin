@@ -17,13 +17,30 @@ dependencies {
     testImplementation("com.github.tschuchortdev:kotlin-compile-testing:1.5.0")
 }
 
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
 tasks.test {
     useJUnitPlatform()
 }
 
+val hasSigningKey = providers.gradleProperty("signingInMemoryKey").isPresent ||
+    providers.environmentVariable("ORG_GRADLE_PROJECT_signingInMemoryKey").isPresent ||
+    providers.gradleProperty("signing.keyId").isPresent
+
 mavenPublishing {
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
-    signAllPublications()
+    if (hasSigningKey) {
+        signAllPublications()
+    }
     coordinates("io.github.jsflax", "lattice-compiler-plugin", version.toString())
     pom {
         name.set("Lattice Compiler Plugin")

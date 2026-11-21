@@ -65,75 +65,15 @@ class ConformanceCorpusTest {
     // lives in latticekotlin itself (compiler plugin / NativeBridge /
     // Results) and only shrinks by fixing the Kotlin SDK. The core-layer
     // divergences ledgered against 1.0.0-rc.1 cleared with the 1.0.1
-    // submodule bump: transactions/own-writes-visible-inside now PASSES
-    // (verified — core 1.0.1's in-transaction read routing is thread-scoped,
-    // and this runner's ops all execute on the txn-owning test thread),
-    // while the two unique-violation scenarios below remain, reduced to
-    // their binding-only cause.
+    // submodule bump (transactions/own-writes-visible-inside), and the two
+    // unique-violation scenarios cleared once @Unique emission landed AND the
+    // runner stopped misclassifying insert failures: `isManaged` is true for
+    // every freshly constructed object, so classifiedAdd reported genuine
+    // UNIQUE-constraint rejections as already_managed. With call-site
+    // classification, uniqueness is verified enforced end-to-end (constraint
+    // fires, transaction rolls back).
     // =========================================================================
-    private val DIVERGENCE_LEDGER: Map<String, String> = buildMap {
-        // --- binding layer (latticekotlin-specific; NOT present in python) ---
-
-        // op: insert(expect_error=add_failed). Expected: duplicate insert into
-        // a unique column fails, table keeps 2 rows. Actual: the insert
-        // SUCCEEDS (3 rows, dup present). Core 1.0.1 fixed its half (unique
-        // DDL now reaches the dynamic-schema path), but the flag never gets
-        // there from Kotlin: the compiler plugin does not read @Unique (no
-        // is_unique in generated descriptors) and NativeBridgeImpl hard-codes
-        // is_unique=false. Verified still diverging on the 1.0.1 pin.
-        put(
-            "errors/unique-violation-add-failed",
-            "binding: unique flag never reaches the C ABI — plugin drops @Unique and " +
-                "NativeBridgeImpl hard-codes is_unique=false (core-side DDL gap fixed in 1.0.1)"
-        )
-        // op: transaction(expect_error=add_failed). Expected: inner duplicate
-        // insert fails, transaction rolls back, final rows [[x, first]].
-        // Actual: both inner inserts succeed and commit. Same root cause.
-        put(
-            "transactions/error-inside-rolls-back",
-            "binding: same is_unique gap — the duplicate insert inside the transaction " +
-                "succeeds instead of failing with add_failed, so nothing rolls back"
-        )
-
-        // FTS is core-required (undeclarable), but the Kotlin binding never
-        // creates the FTS5 shadow table: the compiler plugin does not read
-        // @FullText (no is_full_text in generated descriptors) and
-        // NativeBridgeImpl.createDbWithSchemaArrays hard-codes
-        // is_full_text=false, so _CfArticle_content_fts does not exist and
-        // Results.matching()'s "id IN (SELECT rowid FROM ...)" query fails,
-        // yielding [] for every match. Expected hit lists vs actual [].
-        val ftsCause = "binding: FTS5 table never created — plugin ignores @FullText and " +
-            "NativeBridgeImpl hard-codes is_full_text=false, so Results.matching() queries a " +
-            "missing _<table>_<col>_fts table and returns []"
-        put("query-fts/single-term", ftsCause)
-        put("query-fts/implicit-and", ftsCause)
-        put("query-fts/explicit-or", ftsCause)
-        put("query-fts/phrase", ftsCause)
-        put("query-fts/prefix", ftsCause)
-        put("query-fts/match-update-visibility", ftsCause)
-
-        // KNN is core-required (undeclarable), but latticekotlin has no public
-        // KNN query API at all: DistanceMetric/NearestMatch are inert data
-        // classes, Results has no nearest(), and lattice_db_query_nearest is
-        // not wrapped by NativeBridge.
-        val knnCause = "binding: no public KNN API — lattice_db_query_nearest unwrapped, " +
-            "Results has no nearest() (DistanceMetric/NearestMatch are inert)"
-        put("query-knn/l2-order-and-distances", knnCause)
-        put("query-knn/l2-top-k", knnCause)
-        put("query-knn/cosine-order", knnCause)
-        put("query-knn/knn-with-where-prefilter", knnCause)
-
-        // distinct_by enumeration. Expected one row per distinct city;
-        // actual: all four rows. Results.distinct(by) routes the column into
-        // count (queryCountDistinct) only — enumeration (toList/iterator/get)
-        // calls queryObjects without it. NativeBridge.queryDistinct exists but
-        // Results never uses it.
-        put(
-            "query-shape/distinct-by",
-            "binding: Results.distinct(by) affects count only — enumeration ignores distinctBy " +
-                "(queryObjects path; NativeBridge.queryDistinct is wrapped but unused by Results)"
-        )
-    }
+    private val DIVERGENCE_LEDGER: Map<String, String> = emptyMap()
 
     // =========================================================================
     // Suite tests — one per corpus file, plus a coverage completeness check.

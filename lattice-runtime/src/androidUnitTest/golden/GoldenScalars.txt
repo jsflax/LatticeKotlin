@@ -1,0 +1,214 @@
+# codegen shape: com.lattice.codegen.GoldenScalars
+
+getBool()Z
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "bool"
+  INVOKE com/lattice/LatticeNative.getBoolean(JLjava/lang/String;)Z
+
+getBoolOpt()Ljava/lang/Boolean;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "boolOpt"
+  INVOKE com/lattice/LatticeNative.getBooleanOrNull(JLjava/lang/String;)Ljava/lang/Boolean;
+
+getDouble()D
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "double"
+  INVOKE com/lattice/LatticeNative.getDouble(JLjava/lang/String;)D
+
+getDoubleOpt()Ljava/lang/Double;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "doubleOpt"
+  INVOKE com/lattice/LatticeNative.getDoubleOrNull(JLjava/lang/String;)Ljava/lang/Double;
+
+getFloat()F
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "float"
+  INVOKE com/lattice/LatticeNative.getFloat(JLjava/lang/String;)F
+
+getFloatOpt()Ljava/lang/Float;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "floatOpt"
+  INVOKE com/lattice/LatticeNative.getFloatOrNull(JLjava/lang/String;)Ljava/lang/Float;
+
+getGlobalId()Ljava/lang/String;
+  LOAD 0
+  INVOKE com/lattice/LatticeObject.getGlobalId()Ljava/lang/String;
+
+getId()J
+  LOAD 0
+  INVOKE com/lattice/LatticeObject.getId()J
+
+getInt()I
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "int"
+  INVOKE com/lattice/LatticeNative.getInt(JLjava/lang/String;)I
+
+getIntOpt()Ljava/lang/Integer;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "intOpt"
+  INVOKE com/lattice/LatticeNative.getIntOrNull(JLjava/lang/String;)Ljava/lang/Integer;
+
+getLong()J
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "long"
+  INVOKE com/lattice/LatticeNative.getLong(JLjava/lang/String;)J
+
+getLongOpt()Ljava/lang/Long;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "longOpt"
+  INVOKE com/lattice/LatticeNative.getLongOrNull(JLjava/lang/String;)Ljava/lang/Long;
+
+getString()Ljava/lang/String;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "string"
+  INVOKE com/lattice/LatticeNative.getString(JLjava/lang/String;)Ljava/lang/String;
+
+getStringOpt()Ljava/lang/String;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "stringOpt"
+  INVOKE com/lattice/LatticeNative.getStringOrNull(JLjava/lang/String;)Ljava/lang/String;
+
+get_latticeHandle()J
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+
+get_latticeSchema()Ljava/util/List;
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  CONST "string:2:0:0::0,stringOpt:2:0:1::0,bool:0:0:0::0,boolOpt:0:0:1::0,int:0:0:0::0,intOpt:0:0:1::0,long:0:0:0::0,longOpt:0:0:1::0,float:1:0:0::0,floatOpt:1:0:1::0,double:1:0:0::0,doubleOpt:1:0:1::0"
+  INVOKE com/lattice/LatticeNative.buildSchemaFromString(Ljava/lang/String;)Ljava/util/List;
+
+get_latticeTableName()Ljava/lang/String;
+  CONST "GoldenScalars"
+
+setBool(Z)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "bool"
+  LOAD 1
+  INVOKE java/lang/Boolean.valueOf(Z)Ljava/lang/Boolean;
+  INVOKE com/lattice/LatticeNative.setBoolean(JLjava/lang/String;Ljava/lang/Boolean;)V
+
+setBoolOpt(Ljava/lang/Boolean;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "boolOpt"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setBoolean(JLjava/lang/String;Ljava/lang/Boolean;)V
+
+setDouble(D)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "double"
+  LOAD 1
+  INVOKE java/lang/Double.valueOf(D)Ljava/lang/Double;
+  INVOKE com/lattice/LatticeNative.setDouble(JLjava/lang/String;Ljava/lang/Double;)V
+
+setDoubleOpt(Ljava/lang/Double;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "doubleOpt"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setDouble(JLjava/lang/String;Ljava/lang/Double;)V
+
+setFloat(F)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "float"
+  LOAD 1
+  INVOKE java/lang/Float.valueOf(F)Ljava/lang/Float;
+  INVOKE com/lattice/LatticeNative.setFloat(JLjava/lang/String;Ljava/lang/Float;)V
+
+setFloatOpt(Ljava/lang/Float;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "floatOpt"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setFloat(JLjava/lang/String;Ljava/lang/Float;)V
+
+setInt(I)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "int"
+  LOAD 1
+  INVOKE java/lang/Integer.valueOf(I)Ljava/lang/Integer;
+  INVOKE com/lattice/LatticeNative.setInt(JLjava/lang/String;Ljava/lang/Integer;)V
+
+setIntOpt(Ljava/lang/Integer;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "intOpt"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setInt(JLjava/lang/String;Ljava/lang/Integer;)V
+
+setLong(J)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "long"
+  LOAD 1
+  INVOKE java/lang/Long.valueOf(J)Ljava/lang/Long;
+  INVOKE com/lattice/LatticeNative.setLong(JLjava/lang/String;Ljava/lang/Long;)V
+
+setLongOpt(Ljava/lang/Long;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "longOpt"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setLong(JLjava/lang/String;Ljava/lang/Long;)V
+
+setString(Ljava/lang/String;)V
+  LOAD 1
+  CONST "<set-?>"
+  INVOKE kotlin/jvm/internal/Intrinsics.checkNotNullParameter(Ljava/lang/Object;Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "string"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+setStringOpt(Ljava/lang/String;)V
+  FIELD com/lattice/LatticeNative.INSTANCE:Lcom/lattice/LatticeNative;
+  LOAD 0
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
+  CONST "stringOpt"
+  LOAD 1
+  INVOKE com/lattice/LatticeNative.setString(JLjava/lang/String;Ljava/lang/String;)V
+
+set_latticeHandle(J)V
+  LOAD 0
+  LOAD 1
+  FIELD com/lattice/codegen/GoldenScalars._lattice_handle_field_GoldenScalars:J
