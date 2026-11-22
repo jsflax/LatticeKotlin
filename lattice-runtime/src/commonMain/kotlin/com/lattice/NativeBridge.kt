@@ -70,6 +70,8 @@ internal expect object NativeBridge {
         chunkSize: Long,
         maxReconnectAttempts: Int,
         uploadCoalesceMs: Int,
+        backgroundSyncManaged: Int,
+        syncAutostart: Int,
         migrationTables: Array<String>,
         migrationTransform: ((tableName: String, oldRowJson: String) -> String?)?
     ): Long
@@ -178,6 +180,19 @@ internal expect object NativeBridge {
     fun observeSyncProgress(dbHandle: Long, callback: (Long, Long, Long, Long) -> Unit): Long
     fun observeSyncError(dbHandle: Long, callback: (String) -> Unit): Long
     fun removeSyncObserver(dbHandle: Long, token: Long)
+
+    // ========== Managed Background Sync & Finite syncOnce (3.1.3) ==========
+    fun createSyncCancellation(): Long
+    fun cancelSyncCancellation(cancelHandle: Long)
+    fun isSyncCancellationCancelled(cancelHandle: Long): Boolean
+    fun releaseSyncCancellation(cancelHandle: Long)
+    fun isBackgroundSyncManaged(dbHandle: Long): Boolean
+    fun currentBackgroundSyncGeneration(dbHandle: Long): Long
+    /** Returns 0..3 for [SyncOnceResult] ordinals, or negative [lattice_status_t] on error. */
+    fun syncOnce(dbHandle: Long, maximumDurationSeconds: Double, cancelHandle: Long): Int
+    fun suspendBackgroundSync(dbHandle: Long): Boolean
+    fun resumeBackgroundSync(dbHandle: Long): Boolean
+    fun cancelBackgroundSync(dbHandle: Long): Boolean
 
     // ========== Results Operations ==========
     fun resultsCount(resultsHandle: Long): Int

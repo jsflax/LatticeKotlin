@@ -1,12 +1,21 @@
 package com.lattice
 
+import kotlin.concurrent.Volatile
+import kotlin.coroutines.coroutineContext
 import kotlin.reflect.KClass
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
@@ -50,8 +59,16 @@ data class LatticeConfiguration(
     val isReadOnly: Boolean = false,
     val chunkSize: Long? = null,
     val maxReconnectAttempts: Int? = null,
-    val uploadCoalesceMs: Int? = null
+    val uploadCoalesceMs: Int? = null,
+    val backgroundSyncManaged: Boolean = false,
+    val backgroundSyncMode: BackgroundSyncMode =
+        if (backgroundSyncManaged) BackgroundSyncMode.MANAGED else BackgroundSyncMode.AUTOMATIC
 ) {
+    val effectiveBackgroundSyncManaged: Boolean
+        get() = backgroundSyncManaged || backgroundSyncMode == BackgroundSyncMode.MANAGED
+
+    val effectiveSyncAutostart: Boolean
+        get() = !effectiveBackgroundSyncManaged && backgroundSyncMode != BackgroundSyncMode.DEFERRED
     init {
         require(
             syncEndpoint == null ||
@@ -195,6 +212,122 @@ class Lattice(
         }
     }
 
+    /**
+     * Whether this [Lattice] store was opened under SDK/application-managed background sync lifecycle.
+     */
+    val isBackgroundSyncManaged: Boolean
+        get() = !isClosed && NativeBridge.isBackgroundSyncManaged(dbHandle)
+
+    /**
+     * Active native background sync generation (`0` when suspended or unmanaged).
+     */
+    val currentBackgroundSyncGeneration: Long
+        get() = if (isClosed) 0L else NativeBridge.currentBackgroundSyncGeneration(dbHandle)
+
+    /**
+     * Performs one bounded finite WebSocket sync pass off the caller thread via [Dispatchers.IO].
+     *
+     * Uploads pending local outbox entries and applies initial server catch-up replay within
+     * [maximumDurationSeconds], settling any owned private transport and SQLite resources before returning.
+     * Cancelling the calling coroutine immediately signals native `cancel_background_sync` and awaits
+     * full native settlement before throwing [kotlinx.coroutines.CancellationException].
+     */
+    suspend fun syncOnce(maximumDurationSeconds: Double = 20.0): SyncOnceResult {
+        if (!maximumDurationSeconds.isFinite() || maximumDurationSeconds <= 0.0) {
+            throw LatticeException("maximumDurationSeconds must be finite and greater than zero")
+        }
+        if (isClosed) return SyncOnceResult.UNAVAILABLE
+        coroutineContext.ensureActive()
+        if (config.syncEndpoint != null) {
+            ensureNetworkFactoryRegistered()
+        }
+
+        val cancelHandle = NativeBridge.createSyncCancellation()
+        if (cancelHandle == 0L) {
+            throw LatticeException("Failed to allocate sync cancellation token")
+        }
+        return try {
+            val (code, nativeError) = withContext(Dispatchers.IO) {
+                if (isClosed) {
+                    SyncOnceResult.UNAVAILABLE.ordinal to null
+                } else {
+                    val completionFlag = object {
+                        @Volatile
+                        var finishedNormally: Boolean = false
+                    }
+                    val cancelWatcher = launch(Dispatchers.Default, start = CoroutineStart.UNDISPATCHED) {
+                        try {
+                            awaitCancellation()
+                        } finally {
+                            if (!completionFlag.finishedNormally) {
+                                NativeBridge.cancelSyncCancellation(cancelHandle)
+                                if (!isClosed) {
+                                    NativeBridge.cancelBackgroundSync(dbHandle)
+                                }
+                            }
+                        }
+                    }
+                    try {
+                        val c = NativeBridge.syncOnce(dbHandle, maximumDurationSeconds, cancelHandle)
+                        val err = if (c < 0) NativeBridge.getLastError() else null
+                        c to err
+                    } finally {
+                        completionFlag.finishedNormally = true
+                        cancelWatcher.cancel()
+                    }
+                }
+            }
+            coroutineContext.ensureActive()
+            when (code) {
+                0 -> SyncOnceResult.COMPLETED
+                1 -> SyncOnceResult.BUDGET_EXHAUSTED
+                2 -> SyncOnceResult.ALREADY_RUNNING
+                3 -> SyncOnceResult.UNAVAILABLE
+                else -> throw LatticeException(
+                    nativeError ?: "Finite syncOnce failed (status=$code)"
+                )
+            }
+        } finally {
+            NativeBridge.releaseSyncCancellation(cancelHandle)
+        }
+    }
+
+    /**
+     * Suspends active background/foreground WebSocket sync on this store and settles any managed
+     * generation while keeping the primary [Lattice] store open in memory.
+     */
+    fun suspendBackgroundSync() {
+        if (isClosed) return
+        if (!NativeBridge.suspendBackgroundSync(dbHandle)) {
+            throw LatticeException(
+                NativeBridge.getLastError() ?: "Failed to suspend background sync"
+            )
+        }
+    }
+
+    /**
+     * Resumes continuous foreground WebSocket sync (and managed maintenance) on this store.
+     */
+    fun resumeBackgroundSync() {
+        if (isClosed) return
+        if (config.syncEndpoint != null) {
+            ensureNetworkFactoryRegistered()
+        }
+        if (!NativeBridge.resumeBackgroundSync(dbHandle)) {
+            throw LatticeException(
+                NativeBridge.getLastError() ?: "Failed to resume background sync"
+            )
+        }
+    }
+
+    /**
+     * Requests cancellation of any currently active managed/finite background sync generation on this store.
+     */
+    fun cancelBackgroundSync(): Boolean {
+        if (isClosed) return false
+        return NativeBridge.cancelBackgroundSync(dbHandle)
+    }
+
     companion object {
         private val registryLock = ArenaLock()
         private val modelFactories = mutableMapOf<KClass<*>, () -> LatticeObject>()
@@ -311,6 +444,8 @@ class Lattice(
             chunkSize = config.chunkSize ?: 0L,
             maxReconnectAttempts = config.maxReconnectAttempts ?: -1,
             uploadCoalesceMs = config.uploadCoalesceMs ?: -1,
+            backgroundSyncManaged = if (config.effectiveBackgroundSyncManaged) 1 else -1,
+            syncAutostart = if (config.effectiveSyncAutostart) -1 else 0,
             migrationTables = migrationTables,
             migrationTransform = migrationCallback
         )

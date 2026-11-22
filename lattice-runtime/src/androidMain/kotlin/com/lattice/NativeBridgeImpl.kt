@@ -107,6 +107,8 @@ internal actual object NativeBridge {
         chunkSize: Long,
         maxReconnectAttempts: Int,
         uploadCoalesceMs: Int,
+        backgroundSyncManaged: Int,
+        syncAutostart: Int,
         migrationTables: Array<String>,
         migrationTransform: ((tableName: String, oldRowJson: String) -> String?)?
     ): Long = nativeOpenDbV2(
@@ -117,7 +119,7 @@ internal actual object NativeBridge {
         targetSchemaVersion, busyTimeoutMs, auditRetentionSeconds, syncIsObserver,
         uploadsEnabled, syncAuthMode, websocketSyncIdentity, pinnedServerCertSha256,
         createIfMissing, readOnly, syncFilterJson, chunkSize, maxReconnectAttempts,
-        uploadCoalesceMs, migrationTables, migrationTransform
+        uploadCoalesceMs, backgroundSyncManaged, syncAutostart, migrationTables, migrationTransform
     )
 
     actual fun closeDb(dbHandle: Long) = nativeCloseDb(dbHandle)
@@ -260,6 +262,21 @@ internal actual object NativeBridge {
     actual fun observeSyncError(dbHandle: Long, callback: (String) -> Unit): Long =
         nativeObserveSyncError(dbHandle, callback)
     actual fun removeSyncObserver(dbHandle: Long, token: Long) = nativeRemoveSyncObserver(dbHandle, token)
+
+    // ========== Managed Background Sync & Finite syncOnce (3.1.3) ==========
+    actual fun createSyncCancellation(): Long = nativeCreateSyncCancellation()
+    actual fun cancelSyncCancellation(cancelHandle: Long) = nativeCancelSyncCancellation(cancelHandle)
+    actual fun isSyncCancellationCancelled(cancelHandle: Long): Boolean =
+        nativeIsSyncCancellationCancelled(cancelHandle)
+    actual fun releaseSyncCancellation(cancelHandle: Long) = nativeReleaseSyncCancellation(cancelHandle)
+    actual fun isBackgroundSyncManaged(dbHandle: Long): Boolean = nativeIsBackgroundSyncManaged(dbHandle)
+    actual fun currentBackgroundSyncGeneration(dbHandle: Long): Long =
+        nativeCurrentBackgroundSyncGeneration(dbHandle)
+    actual fun syncOnce(dbHandle: Long, maximumDurationSeconds: Double, cancelHandle: Long): Int =
+        nativeSyncOnce(dbHandle, maximumDurationSeconds, cancelHandle)
+    actual fun suspendBackgroundSync(dbHandle: Long): Boolean = nativeSuspendBackgroundSync(dbHandle)
+    actual fun resumeBackgroundSync(dbHandle: Long): Boolean = nativeResumeBackgroundSync(dbHandle)
+    actual fun cancelBackgroundSync(dbHandle: Long): Boolean = nativeCancelBackgroundSync(dbHandle)
 
     // ========== Results Operations ==========
     actual fun resultsCount(resultsHandle: Long): Int = nativeResultsCount(resultsHandle)
@@ -414,6 +431,8 @@ internal actual object NativeBridge {
         chunkSize: Long,
         maxReconnectAttempts: Int,
         uploadCoalesceMs: Int,
+        backgroundSyncManaged: Int,
+        syncAutostart: Int,
         migrationTables: Array<String>,
         migrationTransform: Any?
     ): Long
@@ -507,6 +526,16 @@ internal actual object NativeBridge {
     private external fun nativeObserveSyncProgress(dbHandle: Long, callback: Any): Long
     private external fun nativeObserveSyncError(dbHandle: Long, callback: Any): Long
     private external fun nativeRemoveSyncObserver(dbHandle: Long, token: Long)
+    private external fun nativeCreateSyncCancellation(): Long
+    private external fun nativeCancelSyncCancellation(cancelHandle: Long)
+    private external fun nativeIsSyncCancellationCancelled(cancelHandle: Long): Boolean
+    private external fun nativeReleaseSyncCancellation(cancelHandle: Long)
+    private external fun nativeIsBackgroundSyncManaged(dbHandle: Long): Boolean
+    private external fun nativeCurrentBackgroundSyncGeneration(dbHandle: Long): Long
+    private external fun nativeSyncOnce(dbHandle: Long, maximumDurationSeconds: Double, cancelHandle: Long): Int
+    private external fun nativeSuspendBackgroundSync(dbHandle: Long): Boolean
+    private external fun nativeResumeBackgroundSync(dbHandle: Long): Boolean
+    private external fun nativeCancelBackgroundSync(dbHandle: Long): Boolean
 
     private external fun nativeResultsCount(resultsHandle: Long): Int
     private external fun nativeResultsGet(resultsHandle: Long, index: Int): Long

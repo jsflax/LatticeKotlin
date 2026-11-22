@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "io.github.jsflax"
-version = "3.1.2"
+version = "3.1.3"
 
 val externalBuildRoot = System.getenv("LATTICE_GRADLE_BUILD_DIR")?.takeIf { it.isNotBlank() }
 

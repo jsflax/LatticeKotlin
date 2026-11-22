@@ -29,6 +29,9 @@ internal actual object NativeBridge {
     private fun Long.toSchedulerPtr(): CPointer<lattice_scheduler_t>? =
         if (this == 0L) null else interpretCPointer(this.toNativePtr())
 
+    private fun Long.toCancelPtr(): CPointer<lattice_sync_cancellation_t>? =
+        if (this == 0L) null else interpretCPointer(this.toNativePtr())
+
     // ========== Database Lifecycle ==========
 
     actual fun createDbInMemory(): Long =
@@ -95,6 +98,8 @@ internal actual object NativeBridge {
         chunkSize = 0L,
         maxReconnectAttempts = -1,
         uploadCoalesceMs = -1,
+        backgroundSyncManaged = -1,
+        syncAutostart = -1,
         migrationTables = emptyArray(),
         migrationTransform = null
     )
@@ -163,6 +168,8 @@ internal actual object NativeBridge {
         chunkSize: Long,
         maxReconnectAttempts: Int,
         uploadCoalesceMs: Int,
+        backgroundSyncManaged: Int,
+        syncAutostart: Int,
         migrationTables: Array<String>,
         migrationTransform: ((tableName: String, oldRowJson: String) -> String?)?
     ): Long = memScoped {
@@ -239,6 +246,8 @@ internal actual object NativeBridge {
         if (chunkSize > 0L) opts.chunk_size = chunkSize
         if (maxReconnectAttempts >= 0) opts.max_reconnect_attempts = maxReconnectAttempts
         if (uploadCoalesceMs >= 0) opts.upload_coalesce_ms = uploadCoalesceMs
+        if (backgroundSyncManaged >= 0) opts.background_sync_managed = backgroundSyncManaged
+        if (syncAutostart >= 0) opts.sync_autostart = syncAutostart
 
         val migRef: StableRef<(String, String) -> String?>? =
             migrationTransform?.let { StableRef.create(it) }
@@ -799,6 +808,51 @@ internal actual object NativeBridge {
     actual fun removeSyncObserver(dbHandle: Long, token: Long) {
         val db = dbHandle.toDbPtr() ?: return
         if (token != 0L) lattice_db_remove_sync_observer(db, token.toULong())
+    }
+
+    // ========== Managed Background Sync & Finite syncOnce (3.1.3) ==========
+
+    actual fun createSyncCancellation(): Long =
+        lattice_sync_cancellation_create()?.rawValue?.toLong() ?: 0L
+
+    actual fun cancelSyncCancellation(cancelHandle: Long) {
+        cancelHandle.toCancelPtr()?.let { lattice_sync_cancellation_cancel(it) }
+    }
+
+    actual fun isSyncCancellationCancelled(cancelHandle: Long): Boolean =
+        cancelHandle.toCancelPtr()?.let { lattice_sync_cancellation_is_cancelled(it) } ?: false
+
+    actual fun releaseSyncCancellation(cancelHandle: Long) {
+        cancelHandle.toCancelPtr()?.let { lattice_sync_cancellation_release(it) }
+    }
+
+    actual fun isBackgroundSyncManaged(dbHandle: Long): Boolean =
+        dbHandle.toDbPtr()?.let { lattice_db_is_background_sync_managed(it) } ?: false
+
+    actual fun currentBackgroundSyncGeneration(dbHandle: Long): Long =
+        dbHandle.toDbPtr()?.let { lattice_db_current_background_sync_generation(it).toLong() } ?: 0L
+
+    actual fun syncOnce(dbHandle: Long, maximumDurationSeconds: Double, cancelHandle: Long): Int = memScoped {
+        val db = dbHandle.toDbPtr() ?: return LATTICE_ERROR_NULL_POINTER
+        val outRes = alloc<lattice_sync_once_result_tVar>()
+        outRes.value = LATTICE_SYNC_ONCE_UNAVAILABLE
+        val st = lattice_db_sync_once(db, maximumDurationSeconds, cancelHandle.toCancelPtr(), outRes.ptr)
+        if (st != LATTICE_OK) st else outRes.value.toInt()
+    }
+
+    actual fun suspendBackgroundSync(dbHandle: Long): Boolean {
+        val db = dbHandle.toDbPtr() ?: return false
+        return lattice_db_suspend_background_sync(db) == LATTICE_OK
+    }
+
+    actual fun resumeBackgroundSync(dbHandle: Long): Boolean {
+        val db = dbHandle.toDbPtr() ?: return false
+        return lattice_db_resume_background_sync(db) == LATTICE_OK
+    }
+
+    actual fun cancelBackgroundSync(dbHandle: Long): Boolean {
+        val db = dbHandle.toDbPtr() ?: return false
+        return lattice_db_cancel_background_sync(db)
     }
 
     // ========== Results Operations ==========
