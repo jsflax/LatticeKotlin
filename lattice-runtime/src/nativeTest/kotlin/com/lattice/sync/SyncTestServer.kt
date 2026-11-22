@@ -60,6 +60,9 @@ class SyncTestServer {
                             send(Frame.Text(prior))
                         } catch (_: Exception) {}
                     }
+                    try {
+                        send(Frame.Text("""{"catchUpComplete":true}"""))
+                    } catch (_: Exception) {}
 
                     try {
                         for (frame in incoming) {
@@ -72,6 +75,12 @@ class SyncTestServer {
                     } finally {
                         // Unregister on disconnect
                         mutex.withLock { sessions.remove(this) }
+                    }
+                }
+                webSocket("/stall") {
+                    // Holds connection open without sending catchUpComplete (for budget/cancellation tests)
+                    for (frame in incoming) {
+                        // Absorb frames until client cancels/disconnects
                     }
                 }
             }

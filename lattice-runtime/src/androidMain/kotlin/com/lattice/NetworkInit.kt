@@ -6,6 +6,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 private const val TAG = "LatticeSync"
 private val networkFactoryRegistered = AtomicBoolean(false)
 
+internal fun markNetworkFactoryRegistered() {
+    networkFactoryRegistered.set(true)
+}
+
 internal fun safeLogDebug(tag: String, msg: String) {
     try { Log.d(tag, msg) } catch (_: Throwable) {}
 }

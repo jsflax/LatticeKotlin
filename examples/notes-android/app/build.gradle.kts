@@ -17,7 +17,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 1
-        versionName = "3.1.2"
+        versionName = "3.1.3"
     }
 
     buildTypes {
@@ -43,7 +43,7 @@ kotlin {
 }
 
 dependencies {
-    implementation("io.github.jsflax:lattice-runtime:3.1.2")
+    implementation("io.github.jsflax:lattice-runtime:3.1.3")
 
     implementation(platform("androidx.compose:compose-bom:2024.10.00"))
     implementation("androidx.compose.ui:ui")

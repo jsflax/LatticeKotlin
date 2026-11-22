@@ -1,5 +1,31 @@
 # Changelog
 
+## 3.1.3 — 2026-11-22
+
+### Added
+
+- **LatticeCore 3.1.3 (`LatticeCAPI` 1.2.0) alignment.** Advances the core pin
+  to `3.1.3`, bringing native managed background sync lifecycle and bounded
+  finite `sync_once` to Android/JVM and Kotlin/Native (`macosArm64`, `macosX64`,
+  `linuxX64`).
+- **Managed Background Sync & Finite `Lattice.syncOnce`.**
+  - `BackgroundSyncMode` (`AUTOMATIC`, `DEFERRED`, `MANAGED`) and
+    `backgroundSyncManaged: Boolean = false` on `LatticeConfiguration` /
+    `Lattice.Configuration`.
+  - `enum class SyncOnceResult { COMPLETED, BUDGET_EXHAUSTED, ALREADY_RUNNING, UNAVAILABLE }`.
+  - `suspend fun Lattice.syncOnce(maximumDurationSeconds: Double = 20.0): SyncOnceResult`,
+    dispatched off the caller thread via `Dispatchers.IO` with structured
+    coroutine cancellation wired directly to native `lattice_sync_cancellation_cancel`
+    and `lattice_db_cancel_background_sync`, awaiting full private-transport and
+    SQLite settlement before returning or throwing `CancellationException`.
+  - `Lattice.suspendBackgroundSync()`, `Lattice.resumeBackgroundSync()`, and
+    `Lattice.cancelBackgroundSync()` so Android `ProcessLifecycleOwner` /
+    `WorkManager` and desktop/native consumers can suspend live WebSocket sync
+    on backgrounding without closing open primary `Lattice` stores.
+- **Android 16 KB ELF page-size compliance preserved.** Ships NDK r27c
+  (`27.2.12479018`) `arm64-v8a` and `x86_64` `libLatticeCAPI.so` and
+  `liblattice_jni.so` binaries verified at `PT_LOAD` `p_align = 16384`.
+
 ## 3.1.2 — 2026-11-21
 
 ### Added

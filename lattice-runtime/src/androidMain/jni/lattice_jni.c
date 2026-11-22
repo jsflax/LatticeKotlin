@@ -351,6 +351,8 @@ JNIEXPORT jlong JNICALL JNI_FN(nativeOpenDbV2)(
     jlong chunkSize,
     jint maxReconnectAttempts,
     jint uploadCoalesceMs,
+    jint backgroundSyncManaged,
+    jint syncAutostart,
     jobjectArray migrationTables,
     jobject migrationTransform
 ) {
@@ -524,6 +526,8 @@ JNIEXPORT jlong JNICALL JNI_FN(nativeOpenDbV2)(
     if (chunkSize > 0) opts.chunk_size = (int64_t)chunkSize;
     if (maxReconnectAttempts >= 0) opts.max_reconnect_attempts = (int32_t)maxReconnectAttempts;
     if (uploadCoalesceMs >= 0) opts.upload_coalesce_ms = (int32_t)uploadCoalesceMs;
+    if (backgroundSyncManaged >= 0) opts.background_sync_managed = (int32_t)backgroundSyncManaged;
+    if (syncAutostart >= 0) opts.sync_autostart = (int32_t)syncAutostart;
 
     jsize num_mig_tables = (migrationTables && migrationTransform)
         ? (*env)->GetArrayLength(env, migrationTables) : 0;
@@ -646,7 +650,7 @@ JNIEXPORT jlong JNICALL JNI_FN(nativeCreateDbWithSchemaArrays)(
         env, thiz, path, tableNames, propertyCounts, propNames, NULL,
         propTypes, propKinds, propNullable, propTargetTables, propLinkTables,
         propFlags, NULL, NULL, NULL, NULL, 0, syncEndpoint, authToken,
-        1, -1, -1, -1, -1, -1, NULL, NULL, -1, -1, NULL, 0, -1, -1, NULL, NULL
+        1, -1, -1, -1, -1, -1, NULL, NULL, -1, -1, NULL, 0, -1, -1, -1, -1, NULL, NULL
     );
 }
 
@@ -2396,4 +2400,73 @@ JNIEXPORT void JNICALL JNI_FN(nativeTriggerOnClose)(JNIEnv* env, jobject thiz,
     char* c_reason = jstring_to_cstring(env, reason);
     lattice_websocket_client_trigger_on_close(client, code, c_reason ? c_reason : "");
     free(c_reason);
+}
+
+// =============================================================================
+// Managed Background Sync Lifecycle & Finite syncOnce (3.1.3 / CAPI 1.2.0)
+// =============================================================================
+
+JNIEXPORT jlong JNICALL JNI_FN(nativeCreateSyncCancellation)(JNIEnv* env, jobject thiz) {
+    (void)env; (void)thiz;
+    return (jlong)(intptr_t)lattice_sync_cancellation_create();
+}
+
+JNIEXPORT void JNICALL JNI_FN(nativeCancelSyncCancellation)(JNIEnv* env, jobject thiz, jlong cancelHandle) {
+    (void)env; (void)thiz;
+    lattice_sync_cancellation_t* tok = (lattice_sync_cancellation_t*)(intptr_t)cancelHandle;
+    if (tok != NULL) lattice_sync_cancellation_cancel(tok);
+}
+
+JNIEXPORT jboolean JNICALL JNI_FN(nativeIsSyncCancellationCancelled)(JNIEnv* env, jobject thiz, jlong cancelHandle) {
+    (void)env; (void)thiz;
+    const lattice_sync_cancellation_t* tok = (const lattice_sync_cancellation_t*)(intptr_t)cancelHandle;
+    return (tok != NULL && lattice_sync_cancellation_is_cancelled(tok)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL JNI_FN(nativeReleaseSyncCancellation)(JNIEnv* env, jobject thiz, jlong cancelHandle) {
+    (void)env; (void)thiz;
+    lattice_sync_cancellation_t* tok = (lattice_sync_cancellation_t*)(intptr_t)cancelHandle;
+    if (tok != NULL) lattice_sync_cancellation_release(tok);
+}
+
+JNIEXPORT jboolean JNICALL JNI_FN(nativeIsBackgroundSyncManaged)(JNIEnv* env, jobject thiz, jlong dbHandle) {
+    (void)env; (void)thiz;
+    lattice_db_t* db = (lattice_db_t*)(intptr_t)dbHandle;
+    return (db != NULL && lattice_db_is_background_sync_managed(db)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jlong JNICALL JNI_FN(nativeCurrentBackgroundSyncGeneration)(JNIEnv* env, jobject thiz, jlong dbHandle) {
+    (void)env; (void)thiz;
+    lattice_db_t* db = (lattice_db_t*)(intptr_t)dbHandle;
+    return db != NULL ? (jlong)lattice_db_current_background_sync_generation(db) : 0;
+}
+
+JNIEXPORT jint JNICALL JNI_FN(nativeSyncOnce)(JNIEnv* env, jobject thiz,
+                                              jlong dbHandle, jdouble maximumDurationSeconds, jlong cancelHandle) {
+    (void)env; (void)thiz;
+    lattice_db_t* db = (lattice_db_t*)(intptr_t)dbHandle;
+    if (db == NULL) return (jint)LATTICE_ERROR_NULL_POINTER;
+    lattice_sync_cancellation_t* tok = (lattice_sync_cancellation_t*)(intptr_t)cancelHandle;
+    lattice_sync_once_result_t result = LATTICE_SYNC_ONCE_UNAVAILABLE;
+    lattice_status_t st = lattice_db_sync_once(db, (double)maximumDurationSeconds, tok, &result);
+    if (st != LATTICE_OK) return (jint)st;
+    return (jint)result;
+}
+
+JNIEXPORT jboolean JNICALL JNI_FN(nativeSuspendBackgroundSync)(JNIEnv* env, jobject thiz, jlong dbHandle) {
+    (void)env; (void)thiz;
+    lattice_db_t* db = (lattice_db_t*)(intptr_t)dbHandle;
+    return (db != NULL && lattice_db_suspend_background_sync(db) == LATTICE_OK) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL JNI_FN(nativeResumeBackgroundSync)(JNIEnv* env, jobject thiz, jlong dbHandle) {
+    (void)env; (void)thiz;
+    lattice_db_t* db = (lattice_db_t*)(intptr_t)dbHandle;
+    return (db != NULL && lattice_db_resume_background_sync(db) == LATTICE_OK) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL JNI_FN(nativeCancelBackgroundSync)(JNIEnv* env, jobject thiz, jlong dbHandle) {
+    (void)env; (void)thiz;
+    lattice_db_t* db = (lattice_db_t*)(intptr_t)dbHandle;
+    return (db != NULL && lattice_db_cancel_background_sync(db)) ? JNI_TRUE : JNI_FALSE;
 }

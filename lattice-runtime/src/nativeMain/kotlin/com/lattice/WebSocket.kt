@@ -24,7 +24,8 @@ import kotlinx.cinterop.*
 @OptIn(ExperimentalForeignApi::class)
 object LatticeNetworkBridge {
 
-    // Track active WebSocket bridges to prevent garbage collection
+    // Track active WebSocket bridges to prevent garbage collection across Dispatchers.IO threads
+    private val wsLock = ArenaLock()
     private val activeWebSockets = mutableMapOf<Long, WebSocketBridge>()
     private var nextBridgeId = 1L
 
@@ -92,13 +93,13 @@ object LatticeNetworkBridge {
      */
     internal class WebSocketBridge(private val webSocket: LatticeWebSocket) {
         private val stableRef = StableRef.create(this)
-        private val bridgeId = nextBridgeId++
+        private val bridgeId = wsLock.withLock { nextBridgeId++ }
 
         val cClient: CPointer<lattice_websocket_client_t>
 
         init {
             // Store reference to prevent GC
-            activeWebSockets[bridgeId] = this
+            wsLock.withLock { activeWebSockets[bridgeId] = this }
 
             // Create C WebSocket client with our callbacks
             cClient = lattice_websocket_client_create(
@@ -137,7 +138,7 @@ object LatticeNetworkBridge {
             try {
                 webSocket.close()
             } catch (_: Throwable) {}
-            activeWebSockets.remove(bridgeId)
+            wsLock.withLock { activeWebSockets.remove(bridgeId) }
             stableRef.dispose()
         }
 

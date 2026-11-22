@@ -10,6 +10,7 @@ object LatticeNetworkBridge {
     private var factoryHandle: Long = 0
 
     fun setGlobalFactory(factory: LatticeWebSocketFactory) {
+        markNetworkFactoryRegistered()
         val jniFactory = JniWebSocketFactory(factory)
         factoryHandle = NativeBridge.createNetworkFactory(jniFactory)
         NativeBridge.setGlobalNetworkFactory(factoryHandle)
